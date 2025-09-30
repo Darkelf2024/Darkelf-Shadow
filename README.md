@@ -67,7 +67,7 @@ Darkelf Shadow is not just another privacy browser—it is a comprehensive solut
 ```bash
 git clone https://github.com/Darkelf2024/Darkelf-Shadow.git
 cd Darkelf-Shadow
-python Darkelf\ Shadow\ 19\ copy.py
+python Darkelf\ Shadow\.py
 ```
 
 #### On Linux/macOS:
