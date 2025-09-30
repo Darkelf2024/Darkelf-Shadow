@@ -2,7 +2,7 @@
 
 **Darkelf Shadow** is a next-generation, privacy-hardened web browser built in Python and PyQt5. It’s designed from the ground up to maximize anonymity, security, anti-tracking, and anti-fingerprinting—out of the box. Darkelf Shadow incorporates deep Tor integration, aggressive ad/tracker defense, and state-of-the-art fingerprint resistance to protect your identity and browsing habits.
 
-![Darkelf Shadow](https://user-images.githubusercontent.com/your-banner.png)
+![Darkelf Shadow]([https://user-images.githubusercontent.com/your-banner.png](https://github.com/Darkelf2024/Darkelf-Shadow/blob/main/Darkelf%20images/Darkelf%20Shadow%20Home.png))
 
 ---
 
