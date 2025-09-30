@@ -50,7 +50,7 @@ Darkelf Shadow is not just another privacy browser—it is a comprehensive solut
 
 - **JavaScript Toggle:** Instantly enable/disable JS globally—defeating many tracking attempts.
 - **Nuke Button:** Wipe all cookies, cache, and browsing history instantly for session privacy.
-- **YouTube Hardening:** Blocks YouTube ad overlays, skips video ads, and strips tracking payloads.
+- Blocks ad overlays, skips video ads, and strips tracking payloads.
 
 ---
 
