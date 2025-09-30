@@ -1,0 +1,52 @@
+{
+  "privacy": {
+    "enable_tor": false,
+    "tor_proxy": "socks5://127.0.0.1:9050",
+    "block_trackers": true,
+    "block_ads": true,
+    "anti_fingerprinting": true,
+    "block_third_party_cookies": true,
+    "https_only": true,
+    "do_not_track": true
+  },
+  "user_agents": [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/119.0"
+  ],
+  "blocked_domains": [
+    "doubleclick.net",
+    "googleadservices.com",
+    "googlesyndication.com",
+    "google-analytics.com",
+    "googletagmanager.com",
+    "facebook.com/tr/",
+    "connect.facebook.net",
+    "scorecardresearch.com",
+    "advertising.com",
+    "amazon-adsystem.com",
+    "criteo.com",
+    "outbrain.com",
+    "taboola.com",
+    "ads.twitter.com",
+    "analytics.twitter.com",
+    "static.ads-twitter.com"
+  ],
+  "browser": {
+    "homepage": "about:blank",
+    "enable_javascript": true,
+    "enable_plugins": false,
+    "enable_webgl": false,
+    "enable_geolocation": false,
+    "enable_notifications": false,
+    "download_directory": "~/Downloads"
+  },
+  "appearance": {
+    "dark_mode": true,
+    "show_bookmarks_bar": true,
+    "show_status_bar": true
+  }
+}
