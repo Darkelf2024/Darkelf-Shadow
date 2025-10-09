@@ -131,7 +131,7 @@ Pull requests, feedback, and issues are welcome! Please see [CONTRIBUTING.md](CO
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for full text.
+LGPL License. See [LICENSE](LICENSE) for full text.
 
 ---
 
