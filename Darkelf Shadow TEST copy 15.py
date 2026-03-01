@@ -1,13 +1,14 @@
 import secrets
 import hashlib
 import sys, os, uuid
+import tempfile
 import math
 import random
 from PySide6.QtCore import Qt, QUrl, QSize, QPointF, QRectF
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLineEdit, QToolBar,
     QTabWidget, QTabBar, QMessageBox, QToolButton,
-    QVBoxLayout, QHBoxLayout, QWidget
+    QVBoxLayout, QHBoxLayout, QWidget, QFileDialog
 )
 from PySide6.QtGui import (
     QAction, QIcon, QPixmap, QPainter, QColor,
@@ -40,6 +41,32 @@ except:
 import urllib.request
 from urllib.error import URLError, HTTPError
 
+# ===================== Secure No-Trace Downloads helpers =====================
+
+def _safe_download_dir() -> str:
+    """
+    Per-session no-trace download directory.
+    Deleted on exit and on 'Nuke'.
+    """
+    root = os.path.join(tempfile.gettempdir(), "darkelf_downloads")
+    os.makedirs(root, exist_ok=True)
+
+    sess = uuid.uuid4().hex
+    d = os.path.join(root, sess)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+def _randomized_filename(suggested: str) -> str:
+    suggested = (suggested or "download").strip()
+    suggested = re.sub(r"[^A-Za-z0-9._-]+", "_", suggested)[:120] or "download"
+
+    base, ext = os.path.splitext(suggested)
+    token = secrets.token_hex(6)
+
+    base = (base[:60] or "download")
+    ext = ext[:12]
+    return f"{base}_{token}{ext}"
+    
 def sanitize_url_clearurls(url):
     # Remove known tracking query parameters from URLs
     clear_params = [
@@ -55,8 +82,10 @@ def sanitize_url_clearurls(url):
     ])
     url_parts.setQuery(new_query)
     return url_parts.toString()
-    
-BOOT_SEED = secrets.token_hex(32)
+
+BOOTUP_CANVAS_SEED = secrets.randbits(32) & 0xFFFFFFFF
+        
+#BOOT_SEED = secrets.token_hex(32)
 DUCK_LITE_HTTPS = "https://duckduckgo.com/lite/"
 MUTE_LOGS_AFTER_BOOT_MS = 0
 
@@ -450,69 +479,109 @@ class EasyListEngine:
 
         if not req_host:
             return False
+            
+        # Never block BrowserLeaks (testing site)
+        if "browserleaks.com" in fp_host:
+            print("BROWSERLEAKS ALLOW:", req_type, req_url)
+            return False
 
-        # --------------------------------------------------
-        # 1️⃣ Never block main document
-        # --------------------------------------------------
+        if req_type is None:
+            return False
+
         if req_type == "document":
             return False
 
-        # --------------------------------------------------
-        # 2️⃣ Third-party detection
-        # --------------------------------------------------
-        is_third_party = _third_party_check(req_host, fp_host)
+        # -----------------------------
+        # SAME-SITE detection
+        # -----------------------------
+        def _site_key(host: str) -> str:
+            parts = [p for p in (host or "").split(".") if p]
+            if len(parts) >= 2:
+                return ".".join(parts[-2:])
+            return host or ""
 
-        # --------------------------------------------------
-        # 3️⃣ YouTube SPECIAL handling (must run BEFORE infra allow)
-        # --------------------------------------------------
+        fp_site = _site_key(fp_host)
+        req_site = _site_key(req_host)
+        same_site = (fp_site and req_site and fp_site == req_site)
+
+        is_third_party = (not same_site) and _third_party_check(req_host, fp_host)
+
+        # -----------------------------
+        # Never block critical same-site core resources
+        # -----------------------------
+        if same_site and req_type in ("script", "xmlhttprequest", "stylesheet", "font", "media"):
+            return False
+
+        # -----------------------------
+        # Never interfere with AWS WAF
+        # -----------------------------
+        if "awswaf.com" in req_host or "token.awswaf.com" in req_host:
+            return False
+
+        # -----------------------------
+        # YouTube ad blocking
+        # -----------------------------
         if "youtube.com" in fp_host or "youtu.be" in fp_host:
-
-            # Block YouTube ad APIs (first or third party)
             YT_AD_ENDPOINTS = (
                 "youtube.com/pagead",
                 "youtube.com/api/stats/ads",
-                "youtube.com/api/stats/qoe",
                 "youtube.com/get_midroll_info",
                 "youtube.com/ptracking",
                 "youtube.com/youtubei/v1/player/ad",
-                "youtube.com/sponsored_cards",
-                "youtube.com/youtubei/v1/sponsorships",
-                "youtube.com/youtubei/v1/browse",
-                "/sponsorblock",                        # community sponsor AdBlock API
-                "/paidpromotion",
             )
-
             if any(ep in u for ep in YT_AD_ENDPOINTS):
                 return True
 
-            # Block ad video streams from googlevideo
             if "googlevideo.com" in req_host:
-                if any(k in u for k in ("oad", "ctier", "adformat", "advert", "midroll")):
+                if any(k in u for k in ("ctier", "adformat", "midroll")):
                     return True
 
-        # --------------------------------------------------
-        # 4️⃣ Infrastructure allowlist (SAFE ONLY)
-        # --------------------------------------------------
+        # -----------------------------
+        # Amazon essential allowlist
+        # -----------------------------
+        if fp_site == "amazon.com":
+            AMAZON_ESSENTIAL = (
+                "media-amazon.com",
+                "ssl-images-amazon.com",
+                "images-amazon.com",
+                "images-na.ssl-images-amazon.com",
+                "m.media-amazon.com",
+                "a0.awsstatic.com",
+                "a1.awsstatic.com",
+                "a2.awsstatic.com",
+                "a3.awsstatic.com",
+                "a4.awsstatic.com",
+                "a5.awsstatic.com",
+                "a6.awsstatic.com",
+                "a7.awsstatic.com",
+            )
+            if any(req_host == h or req_host.endswith("." + h) for h in AMAZON_ESSENTIAL):
+                return False
+
+        # -----------------------------
+        # Infrastructure allowlist
+        # -----------------------------
         INFRA_ALLOW = (
             "amazonaws.com",
             "cloudfront.net",
             "awswaf.com",
         )
-
-        if any(x in req_host for x in INFRA_ALLOW):
+        if any(req_host == x or req_host.endswith("." + x) for x in INFRA_ALLOW):
             return False
 
-        # --------------------------------------------------
-        # 5️⃣ Hard tracker blocklist
-        # --------------------------------------------------
+        # -----------------------------
+        # Hard tracker domains
+        # -----------------------------
         HARD_TRACKERS = (
             "doubleclick.net",
             "googlesyndication.com",
             "googleadservices.com",
+            "adservice.google.com",
             "googletagmanager.com",
             "google-analytics.com",
-            "facebook.net",
+            "analytics.google.com",
             "connect.facebook.net",
+            "facebook.net",
             "adnxs.com",
             "criteo.com",
             "taboola.com",
@@ -520,84 +589,89 @@ class EasyListEngine:
             "scorecardresearch.com",
             "quantserve.com",
         )
-
-        if any(t in req_host for t in HARD_TRACKERS):
+        if (not same_site) and any(req_host == t or req_host.endswith("." + t) for t in HARD_TRACKERS):
             return True
 
-        # --------------------------------------------------
-        # 6️⃣ Script / XHR smart tracker blocking
-        # --------------------------------------------------
-        if req_type in ("script", "xmlhttprequest", "subdocument"):
-
-            TRACKER_KEYWORDS = (
-                "analytics",
-                "tracking",
-                "beacon",
-                "collect",
-                "pixel",
-                "adsystem",
+        # -----------------------------
+        # Third-party ad-tech signals
+        # -----------------------------
+        if req_type in ("script", "xmlhttprequest", "subdocument") and (not same_site):
+            HIGH_SIGNAL = (
                 "doubleclick",
-                "facebook",
-                "scorecardresearch",
-                "quantserve",
+                "googlesyndication",
+                "googleadservices",
                 "pagead",
-                "adunit",
-                "adformat",
-                "midroll",
+                "adsystem",
+                "adservice",
+                "adserver",
+                "gampad",
+                "prebid",
+                "openrtb",
+                "criteo",
+                "taboola",
+                "outbrain",
+                "adnxs",
             )
-
-            if any(k in u for k in TRACKER_KEYWORDS):
+            if any(k in u for k in HIGH_SIGNAL):
                 return True
 
-        # --------------------------------------------------
-        # 7️⃣ Media protection
-        # --------------------------------------------------
-        if req_type == "media":
-            if any(k in u for k in ("ad", "doubleclick", "adsystem")):
+        # -----------------------------
+        # Media blocking (third-party only)
+        # -----------------------------
+        if req_type == "media" and (not same_site):
+            AD_MEDIA_HOSTS = (
+                "doubleclick.net",
+                "googlesyndication.com",
+                "googleadservices.com",
+                "adnxs.com",
+                "criteo.com",
+                "taboola.com",
+                "outbrain.com",
+            )
+            if any(req_host == h or req_host.endswith("." + h) for h in AD_MEDIA_HOSTS):
                 return True
 
-        # --------------------------------------------------
-        # 7.5️⃣ Protect essential YouTube and Google image/font CDNs
-        # --------------------------------------------------
-        if req_type in ("image", "font"):
-            CDN_WHITELIST = (
+        # -----------------------------
+        # YouTube image protection
+        # -----------------------------
+        if req_type == "image":
+            YT_IMAGE_HOSTS = (
                 "ytimg.com",
                 "ggpht.com",
                 "googleusercontent.com",
-                "gstatic.com",
-                "fonts.gstatic.com",
-                "www.gstatic.com",
             )
-            if any(h in req_host for h in CDN_WHITELIST):
+            if any(req_host == h or req_host.endswith("." + h) for h in YT_IMAGE_HOSTS):
                 return False
-                
-        # --------------------------------------------------
-        # 7.6️⃣ Never EasyList-block first-party images
-        # --------------------------------------------------
-        if req_type == "image" and not is_third_party:
+
+        # -----------------------------
+        # Never block same-site images
+        # -----------------------------
+        if req_type == "image" and same_site:
             return False
-            
-        # --------------------------------------------------
-        # 7.7️⃣ Force block known ad iframes
-        # --------------------------------------------------
-        if req_type == "subdocument":
-            if any(k in u for k in (
-                "doubleclick",
-                "googlesyndication",
-                "adservice",
-                "adnxs",
-                "taboola",
-                "outbrain",
-            )):
+
+        # -----------------------------
+        # Ad iframes (fixed indentation bug)
+        # -----------------------------
+        IFRAME_AD_HINTS = (
+            "doubleclick",
+            "googlesyndication",
+            "adservice",
+            "adnxs",
+            "taboola",
+            "outbrain",
+        )
+
+        if req_type == "subdocument" and (not same_site):
+            if any(k in u for k in IFRAME_AD_HINTS):
                 return True
-        # --------------------------------------------------
-        # 8️⃣ EasyList (image + media only)
-        # --------------------------------------------------
+
+        # -----------------------------
+        # EasyList (image/media/subdocument only)
+        # -----------------------------
         if req_type not in ("image", "media", "subdocument"):
             return False
 
         for rule in self.network_rules:
-
             if not _domain_option_allows(fp_host, rule.opts):
                 continue
 
@@ -606,11 +680,10 @@ class EasyListEngine:
             if "~third-party" in rule.opts and is_third_party:
                 continue
 
-            if req_type:
-                type_flags = {"image", "media"}
-                specified = [t for t in type_flags if t in rule.opts]
-                if specified and req_type not in specified:
-                    continue
+            type_flags = {"image", "media", "subdocument"}
+            specified = [t for t in type_flags if t in rule.opts]
+            if specified and req_type not in specified:
+                continue
 
             if rule.re.search(u):
                 if rule.is_exception:
@@ -652,20 +725,53 @@ class EasyListEngine:
 
         return "\n".join(lines)
 
+# --- UA spoof constants (macOS example; change if you want Windows UA) ---
+SPOOF_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+)
+
+SPOOF_CH_UA = '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"'
+SPOOF_CH_UA_MOBILE = "?0"
+SPOOF_CH_UA_PLATFORM = '"macOS"'
+SPOOF_CH_UA_FULL_VERSION = '"122.0.0.0"'
+SPOOF_CH_UA_FULL_VERSION_LIST = (
+    '"Chromium";v="122.0.0.0", "Not(A:Brand";v="24.0.0.0", "Google Chrome";v="122.0.0.0"'
+)
+
 class StealthInterceptor(QWebEngineUrlRequestInterceptor):
     def __init__(self, engine: EasyListEngine):
         super().__init__()
         self.engine = engine
 
     def interceptRequest(self, info):
+        # 1) Always set spoof headers first (even for browserleaks)
+        try:
+            info.setHttpHeader(b"User-Agent", SPOOF_UA.encode("utf-8"))
+
+            # UA-CH (what's leaking "134")
+            info.setHttpHeader(b"Sec-CH-UA", SPOOF_CH_UA.encode("utf-8"))
+            info.setHttpHeader(b"Sec-CH-UA-Mobile", SPOOF_CH_UA_MOBILE.encode("utf-8"))
+            info.setHttpHeader(b"Sec-CH-UA-Platform", SPOOF_CH_UA_PLATFORM.encode("utf-8"))
+            info.setHttpHeader(b"Sec-CH-UA-Full-Version", SPOOF_CH_UA_FULL_VERSION.encode("utf-8"))
+            info.setHttpHeader(b"Sec-CH-UA-Full-Version-List", SPOOF_CH_UA_FULL_VERSION_LIST.encode("utf-8"))
+
+            # Optional entropy hints some sites request:
+            info.setHttpHeader(b"Sec-CH-UA-Arch", b'"x86"')
+            info.setHttpHeader(b"Sec-CH-UA-Bitness", b'"64"')
+            info.setHttpHeader(b"Sec-CH-UA-Model", b'""')
+        except Exception:
+            pass
+
         qurl = info.requestUrl()
         scheme = (qurl.scheme() or "").lower()
+        
+        if "browserleaks.com" in qurl.host():
+            return
 
-        # ✅ Never touch internal schemes (prevents breaking setHtml() + internal error pages)
         if scheme in ("data", "about", "chrome", "qrc", "blob", "view-source"):
             return
 
-        # ✅ Optional: block local file:// for privacy
         if scheme == "file":
             info.block(True)
             return
@@ -673,15 +779,14 @@ class StealthInterceptor(QWebEngineUrlRequestInterceptor):
         req_url = qurl.toString()
         fp_url = info.firstPartyUrl().toString()
 
-        # ✅ Strip tracking params silently (safe)
-        cleaned = sanitize_url_clearurls(req_url)
-        if cleaned != req_url:
-            info.redirect(QUrl(cleaned))
-            return
+    # Do NOT rewrite Amazon or WAF URLs
+        if "amazon." not in req_url and "awswaf.com" not in req_url:
+            cleaned = sanitize_url_clearurls(req_url)
+            if cleaned != req_url:
+                info.redirect(QUrl(cleaned))
+                return
 
-        # ✅ Map resource types safely across PyQt builds
         rt = info.resourceType()
-        # Build resource type map safely for modern PySide6
         type_map = {}
 
         pairs = [
@@ -702,15 +807,28 @@ class StealthInterceptor(QWebEngineUrlRequestInterceptor):
 
         req_type = type_map.get(rt)
 
-        # 🔥 Safe fallback for MainFrame
         if req_type is None:
             if hasattr(QWebEngineUrlRequestInfo.ResourceType, "ResourceTypeMainFrame"):
                 if rt == QWebEngineUrlRequestInfo.ResourceType.ResourceTypeMainFrame:
                     req_type = "document"
+                    
+        # Never rewrite main frame navigations
 
-        # ✅ Decide block/allow
-        if self.engine.should_block(req_url, fp_url, req_type):
-            info.block(True)
+        if req_type and req_type not in ("document", "subdocument"):
+            if "amazon." not in req_url and "awswaf.com" not in req_url:
+                cleaned = sanitize_url_clearurls(req_url)
+                if cleaned != req_url:
+                    info.redirect(QUrl(cleaned))
+                    return
+
+        try:
+            if self.engine.should_block(req_url, fp_url, req_type):
+                print("BLOCKED:", req_type, fp_url, "->", req_url)
+                info.block(True)
+                return
+        except Exception as e:
+            print("Interceptor error:", e)
+            return
 
 # ===================== Cosmetic injection helper =====================
 
@@ -1389,6 +1507,7 @@ class HardenedWebPage(QWebEnginePage):
         prof = self.profile()
         self.interceptor = getattr(prof, "_darkelf_interceptor", None)
         #self.inject_darkelf_letterboxing(skip_youtube=True)
+        #self.inject_youtube_ad_patch()
         self.inject_all_scripts()
 
 
@@ -1411,6 +1530,87 @@ class HardenedWebPage(QWebEnginePage):
         script_obj.setWorldId(QWebEngineScript.MainWorld)
         scripts.insert(script_obj)
         
+    def inject_youtube_ad_patch(self):
+        script = r"""
+        (() => {
+            if (window.__darkelf_yt_patch) return;
+            window.__darkelf_yt_patch = true;
+
+            function stripAds(obj) {
+                if (!obj || typeof obj !== "object") return;
+                delete obj.adPlacements;
+                delete obj.playerAds;
+                delete obj.adSlots;
+                delete obj.adBreakHeartbeatParams;
+                delete obj.adSafetyReason;
+                delete obj.ads;
+            }
+
+            // Patch initial player objects
+            Object.defineProperty(window, "ytInitialPlayerResponse", {
+                set(v) {
+                    stripAds(v);
+                    this._ytResp = v;
+                },
+                get() { return this._ytResp; }
+            });
+
+            Object.defineProperty(window, "ytInitialData", {
+                set(v) {
+                    stripAds(v);
+                    this._ytData = v;
+                },
+                get() { return this._ytData; }
+            });
+
+            // Patch fetch()
+            const origFetch = window.fetch;
+            window.fetch = async function(...args) {
+                const res = await origFetch.apply(this, args);
+                try {
+                    const clone = res.clone();
+                    const text = await clone.text();
+                    if (text.includes("adPlacements") || text.includes("playerAds")) {
+                        const cleaned = text
+                            .replace(/"adPlacements":\[[^\]]*\]/g, '"adPlacements":[]')
+                            .replace(/"playerAds":\[[^\]]*\]/g, '"playerAds":[]');
+                        return new Response(cleaned, {
+                            status: res.status,
+                            statusText: res.statusText,
+                            headers: res.headers
+                        });
+                    }
+                } catch(e) {}
+                return res;
+            };
+
+            // Patch XMLHttpRequest
+            const origOpen = XMLHttpRequest.prototype.open;
+            XMLHttpRequest.prototype.open = function(...args) {
+                this.addEventListener("readystatechange", function() {
+                    try {
+                        if (this.responseText &&
+                            (this.responseText.includes("adPlacements") ||
+                            this.responseText.includes("playerAds"))) {
+                            Object.defineProperty(this, "responseText", {
+                                value: this.responseText
+                                    .replace(/"adPlacements":\[[^\]]*\]/g, '"adPlacements":[]')
+                                    .replace(/"playerAds":\[[^\]]*\]/g, '"playerAds":[]')
+                            });
+                        }
+                    } catch(e){}
+                });
+                return origOpen.apply(this, args);
+            };
+
+        })();
+        """
+
+        self.inject_script(
+            script,
+            injection_point=QWebEngineScript.DocumentCreation,
+            subframes=True)
+
     # --- Inject WebRTC block, geo override, and canvas noise all at DocumentCreation ---
     def stealth_webrtc_block(self):
         script = """
@@ -1544,7 +1744,7 @@ class HardenedWebPage(QWebEnginePage):
             function applyNoise(imageData) {{
                 const data = imageData.data;
                 for (let i = 0; i < data.length; i++) {{
-                    const n = (pixelNoise(seed, i) % 8) - 4;
+                    const n = (pixelNoise(seed, i) % 12) - 4;
                     data[i] = Math.min(255, Math.max(0, data[i] + n));
                 }}
             }}
@@ -1635,7 +1835,7 @@ class HardenedWebPage(QWebEnginePage):
             script,
             injection_point=QWebEngineScript.DocumentCreation,
             subframes=True)
-            
+                    
     def inject_fingerprint_hardware_protection(self):
         script = """
         (() => {
@@ -1919,6 +2119,53 @@ class HardenedWebPage(QWebEnginePage):
             injection_point=QWebEngineScript.DocumentCreation,
             subframes=True)
 
+    def inject_dom_overlay_blocker(self):
+        script = """
+        (() => {
+          // Remove overlays, modals, cookie banners, ad popups, etc.
+          function nuke() {
+            // Site-generic overlays
+            let sels = [
+              '[id*="modal"],[class*="modal"],[id*="overlay"],[class*="overlay"]',
+              '.tp-modal,.tp-backdrop,[class*="paywall"],.qc-cmp2-container,.qc-cmp2-summary-buttons',
+              '#cookie-banner,#cookie-consent,.cookie-overlay,.ad-block-dialog,.adblock-modal',
+              '.ad-slot,.ad-container,.sticky-ad,.ad-banner,.advertisement,[id^="google_ads_iframe"]',
+              'iframe[src*="ads"],iframe[src*="doubleclick"],iframe[src*="googlesyndication"]'
+            ].join(',');
+            document.querySelectorAll(sels).forEach(el => el.style.setProperty('display','none','important'));
+          }
+          new MutationObserver(nuke).observe(document, {childList:true, subtree:true});
+          window.addEventListener('DOMContentLoaded', nuke, false);
+          nuke();
+        })();
+        """
+        self.inject_script(
+            script,
+            injection_point=QWebEngineScript.DocumentCreation,
+            subframes=True)
+            
+    def inject_youtube_overlay_ads(self):
+        script = """
+        (() => {
+          function nukeYT() {
+            document.querySelectorAll(
+              '.ytd-display-ad-renderer, ytd-promoted-sparkles-text-search-renderer, ytd-promoted-video-renderer,' +
+              '.ytp-ad-module, .ad-showing, .ytp-ad-player-overlay, .ytp-ad-image-overlay, .ytp-ad-overlay-slot, #player-ads'
+            ).forEach(el => el.remove());
+            document.querySelectorAll('.badge-style-type-ad, [title*="Ad"], [aria-label*="ad"]').forEach(el => el.remove());
+          }
+          // Only run on YouTube proper
+          if (location.hostname.endsWith('youtube.com')) {
+            new MutationObserver(nukeYT).observe(document, {childList:true, subtree:true});
+            nukeYT();
+          }
+        })();
+        """
+        self.inject_script(
+            script,
+            injection_point=QWebEngineScript.DocumentCreation,
+            subframes=True)
+            
     def inject_exitfullscreen_polyfill(self):
         script = """
         // Polyfill deprecated webkitExitFullscreen()
@@ -1949,7 +2196,19 @@ class HardenedWebPage(QWebEnginePage):
         }, true);
         """
         self.inject_script(suppressor_js, name="__darkelf_resize_observer_patch__")
-            
+        
+    def inject_media_removal(self):
+        js = """
+        (function() {
+            try {
+                document.querySelectorAll("video,audio,source").forEach(function(el) {
+                    el.remove();
+                });
+            } catch(e) {}
+        })();
+        """
+        self.inject_script(js, name="__darkelf_media_removal__")
+    
     def inject_strict_csp(self):
         script = r"""
         (function() {
@@ -1983,109 +2242,278 @@ class HardenedWebPage(QWebEnginePage):
             injection_point=QWebEngineScript.DocumentCreation,
             subframes=True)
             
+    def inject_fetch_guard(self):
+        script = r"""
+        (function() {
 
-            
-    def inject_stealth_storage_block(self):
-        script = """
-        (() => {
-            const block = (target, key) => {
-                try {
-                    Object.defineProperty(target, key, {
-                        get: () => undefined,
-                        set: () => {},
-                        configurable: false
-                    });
-                    delete target[key];
-                } catch (e) {
-                    // Silently ignore expected errors
+            const badKeywords = ["analytics", "track", "ads", "pixel"];
+
+            function shouldBlock(url) {
+                if (!url) return false;
+                url = url.toLowerCase();
+                return badKeywords.some(k => url.includes(k));
+            }
+
+            const origFetch = window.fetch;
+            window.fetch = function() {
+                const url = arguments[0];
+                if (shouldBlock(typeof url === "string" ? url : url.url)) {
+                    return Promise.reject(new Error("Blocked tracking fetch"));
                 }
+                return origFetch.apply(this, arguments);
             };
 
-            const killStorage = (w) => {
-                if (!w) return;
-
-                const targets = [
-                    [w, 'localStorage'],
-                    [w, 'sessionStorage'],
-                    [w, 'indexedDB'],
-                    [w, 'openDatabase'],
-                    [w, 'webkitStorageInfo'],
-                    [w, 'webkitIndexedDB']
-                ];
-
-                targets.forEach(([obj, key]) => {
-                    if (obj) block(obj, key);
-                });
-
-                try {
-                    if (w.navigator) {
-                        block(w.navigator, 'storage');
-                    }
-                } catch (e) {}
+            const origOpen = XMLHttpRequest.prototype.open;
+            XMLHttpRequest.prototype.open = function(method, url) {
+                if (shouldBlock(url)) {
+                    throw new Error("Blocked tracking XHR");
+                }
+                return origOpen.apply(this, arguments);
             };
 
-            // Kill in main window
-            killStorage(window);
-
-            // Iframe defense
-            new MutationObserver((muts) => {
-                for (const m of muts) {
-                    m.addedNodes.forEach((node) => {
-                        if (node.tagName === 'IFRAME') {
-                            try {
-                                const w = node.contentWindow;
-                                killStorage(w);
-                            } catch (e) {}
-                        }
-                    });
-                }
-            }).observe(document, { childList: true, subtree: true });
-
-            console.log('[DarkelfAI] Storage APIs neutralized.');
         })();
         """
-
         self.inject_script(
             script,
             injection_point=QWebEngineScript.DocumentCreation,
             subframes=True)
             
-    def inject_youtube_cosmetic_adblock(self):
-        """
-        Injects a cosmetic adblocker JavaScript for YouTube.
-        Removes sponsored links, 'aboutthisad' panels, promoted videos, and many ad containers.
-        This operates after DocumentCreation and uses MutationObserver for dynamic ad elements.
-        """
-        js = r"""
-        (function() {
-            let selectors = [
-                'a[href*="aboutthisad"]',
-                '[aria-label*="Sponsored"]',
-                '[aria-label*="Ad"]',
-                '.ytd-display-ad-renderer',
-                '.ytd-promoted-video-renderer',
-                '#google_ads_iframe',
-                'ytd-sponsor-promo-renderer',
-                'ytd-promoted-sparkles-text-search-renderer',
-                'ytd-in-feed-ad-layout-renderer'
-            ];
-            function nukeAds() {
-                selectors.forEach(sel => {
-                    document.querySelectorAll(sel).forEach(el => el.remove());
-                });
+    def inject_stealth_storage_block(self):
+        # Memory-only storage shim: prevents crashes while avoiding persistence
+        script = r"""
+        (() => {
+          if (window.__darkelf_storage_shim) return;
+          window.__darkelf_storage_shim = true;
+
+          function makeMemoryStorage() {
+            const store = new Map();
+
+            const api = {
+              get length() { return store.size; },
+              key: (i) => Array.from(store.keys())[i] ?? null,
+              getItem: (k) => {
+                k = String(k);
+                return store.has(k) ? store.get(k) : null;
+              },
+              setItem: (k, v) => {
+                k = String(k);
+                v = String(v);
+                store.set(k, v);
+              },
+              removeItem: (k) => { store.delete(String(k)); },
+              clear: () => { store.clear(); }
+            };
+            return api;
+          }
+
+          const memLocal = makeMemoryStorage();
+          const memSession = makeMemoryStorage();
+
+          function def(obj, prop, value) {
+            try {
+              Object.defineProperty(obj, prop, {
+                get: () => value,
+                configurable: true
+              });
+            } catch(e) {}
+          }
+
+          // Provide storage objects so sites don't throw
+          try { def(window, "localStorage", memLocal); } catch(e) {}
+          try { def(window, "sessionStorage", memSession); } catch(e) {}
+
+          // Keep indexedDB disabled if you want (many sites survive without it)
+          try { Object.defineProperty(window, "indexedDB", { get: () => undefined, configurable: true }); } catch(e) {}
+          try { Object.defineProperty(window, "openDatabase", { get: () => undefined, configurable: true }); } catch(e) {}
+
+          // Storage events: optional noop
+          try {
+            window.addEventListener("storage", () => {}, true);
+          } catch(e) {}
+
+          // Iframe defense: apply same shim
+          const applyTo = (w) => {
+            try {
+              if (!w || w.__darkelf_storage_shim) return;
+              w.__darkelf_storage_shim = true;
+              try { def(w, "localStorage", makeMemoryStorage()); } catch(e) {}
+              try { def(w, "sessionStorage", makeMemoryStorage()); } catch(e) {}
+              try { Object.defineProperty(w, "indexedDB", { get: () => undefined, configurable: true }); } catch(e) {}
+              try { Object.defineProperty(w, "openDatabase", { get: () => undefined, configurable: true }); } catch(e) {}
+            } catch(e) {}
+          };
+
+          new MutationObserver((muts) => {
+            for (const m of muts) {
+              for (const node of m.addedNodes) {
+                if (node && node.tagName === "IFRAME") {
+                  try { applyTo(node.contentWindow); } catch(e) {}
+                  try { node.addEventListener("load", () => applyTo(node.contentWindow), { once: true }); } catch(e) {}
+                }
+              }
             }
-            // Initial sweep
-            nukeAds();
-            // Observe and sweep dynamically added ads
-            var observer = new MutationObserver(nukeAds);
-            observer.observe(document.body, { childList: true, subtree: true });
+          }).observe(document.documentElement || document, { childList: true, subtree: true });
+
         })();
         """
+        self.inject_script(
+            script,
+            injection_point=QWebEngineScript.DocumentCreation,
+            subframes=True)
+            
+    def inject_iframe_environment_harmonizer(self):
+        js = r"""
+        (() => {
+          if (window.__darkelf_iframe_harmonizer) return;
+          window.__darkelf_iframe_harmonizer = true;
+
+          const SPOOF = {
+            platform: "Win32",
+            vendor: "Google Inc.",
+            userAgent: navigator.userAgent,   // or hardcode your UA string
+            deviceMemory: undefined,
+            hardwareConcurrency: (Math.floor(Math.random() * 11) + 2),
+            languages: ["en-US", "en"],
+            language: "en-US",
+            maxTouchPoints: 0,
+          };
+
+          function def(obj, prop, getter) {
+            try {
+              Object.defineProperty(obj, prop, { get: getter, configurable: true });
+          } catch (e) {}
+        }
+
+        function applyToWindow(w) {
+          if (!w || w.__darkelf_spoofed) return;
+          try { w.__darkelf_spoofed = true; } catch(e) {}
+
+          try {
+            const n = w.navigator;
+            if (n) {
+              def(n, "platform", () => SPOOF.platform);
+              def(n, "vendor", () => SPOOF.vendor);
+              def(n, "userAgent", () => SPOOF.userAgent);
+
+              def(n, "deviceMemory", () => SPOOF.deviceMemory);
+              def(n, "hardwareConcurrency", () => SPOOF.hardwareConcurrency);
+
+              def(n, "languages", () => SPOOF.languages.slice());
+              def(n, "language", () => SPOOF.language);
+
+              def(n, "maxTouchPoints", () => SPOOF.maxTouchPoints);
+            }
+          } catch(e) {}
+
+          // If BrowserLeaks flags screen mismatches, you can enable these:
+          // try {
+          //   const s = w.screen;
+          //   if (s) {
+          //     def(s, "availWidth",  () => screen.availWidth);
+          //     def(s, "availHeight", () => screen.availHeight);
+          //   }
+          // } catch(e) {}
+        }
+
+        function patchAllIframes() {
+          document.querySelectorAll("iframe").forEach((f) => {
+            try { applyToWindow(f.contentWindow); } catch(e) {}
+          });
+        }
+
+        // Apply to main window now
+        applyToWindow(window);
+
+        // Apply to existing iframes ASAP
+        patchAllIframes();
+
+        // Watch for new iframes
+        const mo = new MutationObserver((muts) => {
+          for (const m of muts) {
+            for (const node of m.addedNodes) {
+              if (!node || !node.tagName) continue;
+
+              if (node.tagName === "IFRAME") {
+                try { applyToWindow(node.contentWindow); } catch(e) {}
+                try {
+                  node.addEventListener("load", () => {
+                    try { applyToWindow(node.contentWindow); } catch(e) {}
+                  }, { once: true });
+                } catch(e) {}
+                continue;
+              }
+
+              if (node.querySelectorAll) {
+                node.querySelectorAll("iframe").forEach((f) => {
+                  try { applyToWindow(f.contentWindow); } catch(e) {}
+                });
+              }
+            }
+          }
+        });
+
+        try {
+          mo.observe(document.documentElement || document, { childList: true, subtree: true });
+        } catch(e) {}
+
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", patchAllIframes, { once: true });
+        }
+      })();
+      """
         self.inject_script(
             js,
             injection_point=QWebEngineScript.DocumentCreation,
             subframes=True)
             
+    def inject_uach_js_spoof(self):
+        js = f"""
+        (() => {{
+          const UA = {json.dumps(SPOOF_UA)};
+          const UAData = {{
+            brands: [
+              {{ brand: "Chromium", version: "122" }},
+              {{ brand: "Not(A:Brand", version: "24" }},
+              {{ brand: "Google Chrome", version: "122" }}
+            ],
+            mobile: false,
+            platform: "macOS",
+            getHighEntropyValues: async (hints) => {{
+              const out = {{}};
+              (hints || []).forEach((k) => {{
+                if (k === "architecture") out.architecture = "x86";
+                else if (k === "bitness") out.bitness = "64";
+                else if (k === "model") out.model = "";
+                else if (k === "platform") out.platform = "macOS";
+                else if (k === "platformVersion") out.platformVersion = "10.15.7";
+                else if (k === "uaFullVersion") out.uaFullVersion = "122.0.0.0";
+                else if (k === "fullVersionList") out.fullVersionList = [
+                  {{ brand: "Chromium", version: "122.0.0.0" }},
+                  {{ brand: "Not(A:Brand", version: "24.0.0.0" }},
+                  {{ brand: "Google Chrome", version: "122.0.0.0" }}
+                ];
+              }});
+              return out;
+            }}
+          }};
+
+          function def(obj, prop, value) {{
+            try {{
+              Object.defineProperty(obj, prop, {{ get: () => value, configurable: true }});
+            }} catch(e) {{}}
+          }}
+
+          try {{
+            def(navigator, "userAgent", UA);
+            def(navigator, "vendor", "Google Inc.");
+            if (navigator.userAgentData) {{
+              def(navigator, "userAgentData", UAData);
+            }}
+          }} catch(e) {{}}
+        }})();
+        """
+        self.inject_script(js, injection_point=QWebEngineScript.DocumentCreation, subframes=True)
+          
     def inject_all_scripts(self):
         self.stealth_webrtc_block()
         self.block_webrtc_sdp_logging()
@@ -2097,11 +2525,15 @@ class HardenedWebPage(QWebEnginePage):
         self.inject_webgl_fingerprint_per_domain()
         self.inject_timezone_chicago_offset()
         self.inject_font_protection()
-        self.inject_youtube_cosmetic_adblock()
+        self.inject_uach_js_spoof()
+        #self.inject_dom_overlay_blocker()
         #self.inject_exitfullscreen_polyfill()
         self.inject_resize_observer_suppressor()
+        #self.inject_media_removal()
         #self.inject_strict_csp()
+        #self.inject_fetch_guard()
         self.inject_stealth_storage_block()
+        self.inject_iframe_environment_harmonizer()
 
     def acceptNavigationRequest(self, url, navtype, isMainFrame):
         if url.scheme() == "file":
@@ -2167,6 +2599,12 @@ class DarkelfBrowser(QMainWindow):
         self.mini_ai = DarkelfMiniAISentinel()
         QApplication.instance().aboutToQuit.connect(self._cleanup_webengine)
         self._add_tab(home=True)
+        
+        self._download_dir = _safe_download_dir()
+        self._downloaded_files: list[str] = []
+        self._hook_secure_downloads()
+
+        QApplication.instance().aboutToQuit.connect(self._wipe_download_traces)
 
     def on_url_entered(self):
         text = self.addr.text().strip()
@@ -2314,7 +2752,8 @@ class DarkelfBrowser(QMainWindow):
         
     def _add_tab(self, url=None, home=False):
         profile = self.shared_profile
-        canvas_seed = secrets.randbits(32) & 0xFFFFFFFF
+        tab_seed = secrets.randbits(32) & 0xFFFFFFFF
+        canvas_seed = tab_seed ^ BOOTUP_CANVAS_SEED
 
         view = QWebEngineView(self)
         view._profile = profile
@@ -2506,11 +2945,82 @@ class DarkelfBrowser(QMainWindow):
             controller.authenticate(cookie)
         except Exception as e:
             print(f"[Darkelf] Tor cookie authentication failed: {e}")
+            
+    def _hook_secure_downloads(self):
+        # QtWebEngine will emit this for any download (normal link, blob, etc.)
+        self.shared_profile.downloadRequested.connect(self._handle_download_requested)
 
+    def _handle_download_requested(self, item):
+        """
+        Secure download handler.
+        item is a QWebEngineDownloadRequest (Qt6).
+        """
+        try:
+            url = item.url().toString()
+            scheme = (item.url().scheme() or "").lower()
+            # Block weird schemes
+            if scheme not in ("http", "https", "blob", "data"):
+                item.cancel()
+                return
+
+            # Suggested file name from server
+            suggested = ""
+            try:
+                suggested = item.suggestedFileName()
+            except Exception:
+                pass
+
+            # Always randomize name if saving in no-trace dir
+            fname = _randomized_filename(suggested)
+            dest = os.path.join(self._download_dir, fname)
+
+            # Optional: ask user where to save.
+            # If you want *pure no-trace*, comment this block out.
+            ask_user = True
+            if ask_user:
+                picked, _ = QFileDialog.getSaveFileName(
+                    self,
+                    "Save download (No-trace mode)",
+                    dest
+                )
+                if not picked:
+                    item.cancel()
+                    return
+                dest = picked
+
+            # Force destination + accept
+            item.setDownloadDirectory(os.path.dirname(dest))
+            item.setDownloadFileName(os.path.basename(dest))
+            item.accept()
+
+            # Track for cleanup
+            self._downloaded_files.append(dest)
+
+            # If the download fails/finishes, you can log status here
+            try:
+                item.finished.connect(lambda: None)
+            except Exception:
+                pass
+
+        except Exception as e:
+            try:
+                item.cancel()
+            except Exception:
+                pass
+            print("Download handler error:", e)
+
+    def _wipe_download_traces(self):
+        """
+        Deletes the per-session temp download directory (best-effort).
+        """
+        try:
+            if getattr(self, "_download_dir", None) and os.path.isdir(self._download_dir):
+                shutil.rmtree(self._download_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+        
 if __name__ == "__main__":
-    import os
-    import uuid
-    import tempfile
 
     # 🔥 Fix context leak + shader cache persistence
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
@@ -2557,7 +3067,13 @@ if __name__ == "__main__":
     profile.setHttpAcceptLanguage("en-US,en;q=0.9")
 
     settings = profile.settings()
-
+    
+        # after profile is created (in __main__):
+    profile.setHttpUserAgent(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    )
+    
     settings.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
     settings.setAttribute(QWebEngineSettings.WebAttribute.PluginsEnabled, False)
     settings.setAttribute(QWebEngineSettings.WebAttribute.HyperlinkAuditingEnabled, False)
@@ -2581,6 +3097,5 @@ if __name__ == "__main__":
     w.show()
 
     sys.exit(app.exec())
-
 
 
