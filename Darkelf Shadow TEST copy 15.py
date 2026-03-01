@@ -2513,7 +2513,140 @@ class HardenedWebPage(QWebEnginePage):
         }})();
         """
         self.inject_script(js, injection_point=QWebEngineScript.DocumentCreation, subframes=True)
-          
+        
+    import json
+
+    def build_canvas_spoof_js(self, seed: int) -> str:
+        # IMPORTANT: keep this as a normal string (not executed in Python)
+        return f"""
+(() => {{
+  if (window.__darkelf_canvas_spoof_installed) return;
+  window.__darkelf_canvas_spoof_installed = true;
+
+  const TAB_SEED = {int(seed)} >>> 0;
+
+  function hash32(str) {{
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < str.length; i++) {{
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }}
+    return h >>> 0;
+  }}
+
+  const host = (location && location.hostname) ? location.hostname : "";
+  const DOMAIN_SEED = hash32(host);
+  const SEED = (TAB_SEED ^ DOMAIN_SEED) >>> 0;
+
+  function noiseByte(i) {{
+    let x = (SEED ^ i) >>> 0;
+    x ^= x >>> 16;
+    x = Math.imul(x, 0x7feb352d) >>> 0;
+    x ^= x >>> 15;
+    x = Math.imul(x, 0x846ca68b) >>> 0;
+    x ^= x >>> 16;
+    return x & 0xff;
+  }}
+
+  function applyNoiseToImageData(imageData) {{
+    try {{
+      const d = imageData.data;
+      for (let i = 0; i < d.length; i += 4) {{
+        const n = (noiseByte(i) % 7) - 3; // [-3..+3]
+        d[i]   = (d[i]   + n) & 0xff;
+        d[i+1] = (d[i+1] + n) & 0xff;
+        d[i+2] = (d[i+2] + n) & 0xff;
+      }}
+    }} catch(e) {{}}
+    return imageData;
+  }}
+
+  function safePatch(obj, name, wrapFactory) {{
+    try {{
+      const orig = obj && obj[name];
+      if (!orig || orig.__darkelf_patched) return;
+      const wrapped = wrapFactory(orig);
+      wrapped.__darkelf_patched = true;
+      Object.defineProperty(obj, name, {{
+        value: wrapped,
+        configurable: true,
+        writable: true
+      }});
+    }} catch(e) {{}}
+  }}
+
+  safePatch(CanvasRenderingContext2D.prototype, "getImageData", (orig) => function(...args) {{
+    const img = orig.apply(this, args);
+    return applyNoiseToImageData(img);
+  }});
+
+  function withTempNoisedPixels(canvas, fn) {{
+    try {{
+      const ctx = canvas.getContext && canvas.getContext("2d");
+      if (!ctx) return fn();
+
+      const w = canvas.width|0, h = canvas.height|0;
+      if (!w || !h) return fn();
+
+      const orig = ctx.getImageData(0, 0, w, h);
+      const copy = ctx.createImageData(orig.width, orig.height);
+      copy.data.set(orig.data);
+
+      applyNoiseToImageData(copy);
+      ctx.putImageData(copy, 0, 0);
+      try {{
+        return fn();
+      }} finally {{
+        ctx.putImageData(orig, 0, 0);
+      }}
+    }} catch(e) {{
+      return fn();
+    }}
+  }}
+
+  safePatch(HTMLCanvasElement.prototype, "toDataURL", (orig) => function(...args) {{
+    return withTempNoisedPixels(this, () => orig.apply(this, args));
+  }});
+
+  safePatch(HTMLCanvasElement.prototype, "toBlob", (orig) => function(cb, type, quality) {{
+    return withTempNoisedPixels(this, () => orig.call(this, cb, type, quality));
+  }});
+
+  function patchWebGL(protoName) {{
+    const P = window[protoName] && window[protoName].prototype;
+    if (!P) return;
+
+    safePatch(P, "readPixels", (orig) => function(x, y, w, h, format, type, pixels) {{
+      const rv = orig.apply(this, arguments);
+      try {{
+        if (pixels && pixels.length && typeof pixels[0] === "number") {{
+          const step = Math.max(4, Math.floor(pixels.length / 64));
+          for (let i = 0; i < pixels.length; i += step) {{
+            pixels[i] = (pixels[i] + ((noiseByte(i) % 5) - 2)) & 0xff;
+          }}
+        }}
+      }} catch(e) {{}}
+      return rv;
+    }});
+  }}
+
+  patchWebGL("WebGLRenderingContext");
+  patchWebGL("WebGL2RenderingContext");
+
+}})();
+"""
+
+    def inject_build_canvas_spoof_js(self):
+        js = self.build_canvas_spoof_js(self._canvas_seed)
+        self.inject_script(
+            js,
+            injection_point=QWebEngineScript.DocumentCreation,
+            subframes=True,
+            name="__darkelf_canvas_spoofer__"
+        )
+
+
+  
     def inject_all_scripts(self):
         self.stealth_webrtc_block()
         self.block_webrtc_sdp_logging()
@@ -2534,6 +2667,7 @@ class HardenedWebPage(QWebEnginePage):
         #self.inject_fetch_guard()
         self.inject_stealth_storage_block()
         self.inject_iframe_environment_harmonizer()
+        self.inject_build_canvas_spoof_js()
 
     def acceptNavigationRequest(self, url, navtype, isMainFrame):
         if url.scheme() == "file":
@@ -2840,20 +2974,27 @@ class DarkelfBrowser(QMainWindow):
 
     def close_tab(self, idx):
         w = self.tabs.widget(idx)
+
+        # Remove the tab from the UI FIRST
+        self.tabs.removeTab(idx)
+
         if isinstance(w, QWebEngineView):
             try:
+                # Stop media
                 w.page().runJavaScript(
                     "document.querySelectorAll('video,audio').forEach(m=>{try{m.pause(); m.src='';}catch(e){}})"
                 )
             except Exception:
                 pass
+
+            # Stop loading + release resources
+            w.page().triggerAction(QWebEnginePage.Stop)
             w.page().setAudioMuted(True)
-            w.page().setUrl(QUrl("about:blank"))
+            w.setUrl(QUrl("about:blank"))
+
+            # Proper deletion
             w.page().deleteLater()
             w.deleteLater()
-        self.tabs.removeTab(idx)
-        if self.tabs.count() == 0:
-            self._add_tab(home=True)
             
     def _cleanup_webengine(self):
         # Close tabs from last to first
@@ -2917,8 +3058,11 @@ class DarkelfBrowser(QMainWindow):
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
         )
+
         if reply != QMessageBox.Yes:
             return
+
+        # Clear data from profiles
         for i in range(self.tabs.count()):
             view = self.tabs.widget(i)
             if isinstance(view, QWebEngineView):
@@ -2929,15 +3073,20 @@ class DarkelfBrowser(QMainWindow):
                     prof.cookieStore().deleteAllCookies()
                 except Exception:
                     pass
-        while self.tabs.count():
+
+        # Close ALL tabs safely
+        while self.tabs.count() > 0:
             self.close_tab(0)
+
+        # Create ONE fresh tab
         self._add_tab(home=True)
+
         QMessageBox.information(
             self,
             "Nuke Complete",
             "All browser data has been wiped!"
         )
-            
+
     def authenticate_cookie(self, controller, cookie_path):
         try:
             with open(cookie_path, 'rb') as f:
@@ -3097,5 +3246,3 @@ if __name__ == "__main__":
     w.show()
 
     sys.exit(app.exec())
-
-
