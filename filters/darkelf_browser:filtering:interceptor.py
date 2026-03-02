@@ -40,7 +40,6 @@ class StealthInterceptor(QWebEngineUrlRequestInterceptor):
         if "amazon." not in req_url and "awswaf.com" not in req_url:
             cleaned = sanitize_url_clearurls(req_url)
             if cleaned != req_url:
-                info.redirect(QUrl(cleaned))
                 return
         rt = info.resourceType()
         type_map = {}
