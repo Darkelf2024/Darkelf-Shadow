@@ -482,7 +482,7 @@ class EasyListEngine:
             
         # Never block BrowserLeaks (testing site)
         if "browserleaks.com" in fp_host:
-            print("BROWSERLEAKS ALLOW:", req_type, req_url)
+            print("BROWSERLEAKS ALLOW:", req_type, url)
             return False
 
         if req_type is None:
@@ -505,6 +505,35 @@ class EasyListEngine:
         same_site = (fp_site and req_site and fp_site == req_site)
 
         is_third_party = (not same_site) and _third_party_check(req_host, fp_host)
+        
+        # -------------------------------------------------
+        # Treat Wikimedia family as same-site
+        # -------------------------------------------------
+        WIKIMEDIA_FAMILY = (
+            "wikipedia.org",
+            "wikimedia.org",
+            "wmfusercontent.org",
+        )
+
+        if any(fp_host.endswith(x) for x in WIKIMEDIA_FAMILY) and \
+        any(req_host.endswith(x) for x in WIKIMEDIA_FAMILY):
+            same_site = True
+            is_third_party = False
+
+
+        # -------------------------------------------------
+        # Treat GitHub family as same-site
+        # -------------------------------------------------
+        GITHUB_FAMILY = (
+            "github.com",
+            "githubusercontent.com",
+            "githubassets.com",
+        )
+
+        if any(fp_host.endswith(x) for x in GITHUB_FAMILY) and \
+        any(req_host.endswith(x) for x in GITHUB_FAMILY):
+            same_site = True
+            is_third_party = False
 
         # -----------------------------
         # Never block critical same-site core resources
@@ -783,7 +812,6 @@ class StealthInterceptor(QWebEngineUrlRequestInterceptor):
         if "amazon." not in req_url and "awswaf.com" not in req_url:
             cleaned = sanitize_url_clearurls(req_url)
             if cleaned != req_url:
-                info.redirect(QUrl(cleaned))
                 return
 
         rt = info.resourceType()
@@ -1507,7 +1535,6 @@ class HardenedWebPage(QWebEnginePage):
         prof = self.profile()
         self.interceptor = getattr(prof, "_darkelf_interceptor", None)
         #self.inject_darkelf_letterboxing(skip_youtube=True)
-        #self.inject_youtube_ad_patch()
         self.inject_all_scripts()
 
 
@@ -2118,73 +2145,7 @@ class HardenedWebPage(QWebEnginePage):
             script,
             injection_point=QWebEngineScript.DocumentCreation,
             subframes=True)
-
-    def inject_dom_overlay_blocker(self):
-        script = """
-        (() => {
-          // Remove overlays, modals, cookie banners, ad popups, etc.
-          function nuke() {
-            // Site-generic overlays
-            let sels = [
-              '[id*="modal"],[class*="modal"],[id*="overlay"],[class*="overlay"]',
-              '.tp-modal,.tp-backdrop,[class*="paywall"],.qc-cmp2-container,.qc-cmp2-summary-buttons',
-              '#cookie-banner,#cookie-consent,.cookie-overlay,.ad-block-dialog,.adblock-modal',
-              '.ad-slot,.ad-container,.sticky-ad,.ad-banner,.advertisement,[id^="google_ads_iframe"]',
-              'iframe[src*="ads"],iframe[src*="doubleclick"],iframe[src*="googlesyndication"]'
-            ].join(',');
-            document.querySelectorAll(sels).forEach(el => el.style.setProperty('display','none','important'));
-          }
-          new MutationObserver(nuke).observe(document, {childList:true, subtree:true});
-          window.addEventListener('DOMContentLoaded', nuke, false);
-          nuke();
-        })();
-        """
-        self.inject_script(
-            script,
-            injection_point=QWebEngineScript.DocumentCreation,
-            subframes=True)
-            
-    def inject_youtube_overlay_ads(self):
-        script = """
-        (() => {
-          function nukeYT() {
-            document.querySelectorAll(
-              '.ytd-display-ad-renderer, ytd-promoted-sparkles-text-search-renderer, ytd-promoted-video-renderer,' +
-              '.ytp-ad-module, .ad-showing, .ytp-ad-player-overlay, .ytp-ad-image-overlay, .ytp-ad-overlay-slot, #player-ads'
-            ).forEach(el => el.remove());
-            document.querySelectorAll('.badge-style-type-ad, [title*="Ad"], [aria-label*="ad"]').forEach(el => el.remove());
-          }
-          // Only run on YouTube proper
-          if (location.hostname.endsWith('youtube.com')) {
-            new MutationObserver(nukeYT).observe(document, {childList:true, subtree:true});
-            nukeYT();
-          }
-        })();
-        """
-        self.inject_script(
-            script,
-            injection_point=QWebEngineScript.DocumentCreation,
-            subframes=True)
-            
-    def inject_exitfullscreen_polyfill(self):
-        script = """
-        // Polyfill deprecated webkitExitFullscreen()
-        (function() {
-            if (HTMLVideoElement && !HTMLVideoElement.prototype._old_webkitExitFullscreenPatched) {
-                HTMLVideoElement.prototype._old_webkitExitFullscreenPatched = true;
-                HTMLVideoElement.prototype.webkitExitFullscreen = function() {
-                    if (document.exitFullscreen) {
-                        document.exitFullscreen();
-                    }
-                }
-            }
-        })();
-        """
-        self.inject_script(
-            script,
-            injection_point=QWebEngineScript.DocumentCreation,
-            subframes=True)
-            
+                                    
     def inject_resize_observer_suppressor(self):
         suppressor_js = """
         try {
@@ -2197,87 +2158,6 @@ class HardenedWebPage(QWebEnginePage):
         """
         self.inject_script(suppressor_js, name="__darkelf_resize_observer_patch__")
         
-    def inject_media_removal(self):
-        js = """
-        (function() {
-            try {
-                document.querySelectorAll("video,audio,source").forEach(function(el) {
-                    el.remove();
-                });
-            } catch(e) {}
-        })();
-        """
-        self.inject_script(js, name="__darkelf_media_removal__")
-    
-    def inject_strict_csp(self):
-        script = r"""
-        (function() {
-            try {
-                function addCSP() {
-                    try {
-                        const meta = document.createElement('meta');
-                        meta.httpEquiv = "Content-Security-Policy";
-                        meta.content =
-                            "default-src * blob: data:; " +
-                            "script-src 'self' https: 'unsafe-inline'; " +
-                            "connect-src 'self' https:; " +
-                            "img-src 'self' https: data:; " +
-                            "style-src 'self' https: 'unsafe-inline'; " +
-                            "frame-src 'self' https:;";
-                        (document.head || document.documentElement).appendChild(meta);
-                    } catch(e) {}
-                }
-
-                // If head isn't ready yet, wait a tick
-                if (document.head || document.documentElement) {
-                    addCSP();
-                } else {
-                    document.addEventListener("DOMContentLoaded", addCSP, { once: true });
-                }
-            } catch(e) {}
-        })();
-        """
-        self.inject_script(
-            script,
-            injection_point=QWebEngineScript.DocumentCreation,
-            subframes=True)
-            
-    def inject_fetch_guard(self):
-        script = r"""
-        (function() {
-
-            const badKeywords = ["analytics", "track", "ads", "pixel"];
-
-            function shouldBlock(url) {
-                if (!url) return false;
-                url = url.toLowerCase();
-                return badKeywords.some(k => url.includes(k));
-            }
-
-            const origFetch = window.fetch;
-            window.fetch = function() {
-                const url = arguments[0];
-                if (shouldBlock(typeof url === "string" ? url : url.url)) {
-                    return Promise.reject(new Error("Blocked tracking fetch"));
-                }
-                return origFetch.apply(this, arguments);
-            };
-
-            const origOpen = XMLHttpRequest.prototype.open;
-            XMLHttpRequest.prototype.open = function(method, url) {
-                if (shouldBlock(url)) {
-                    throw new Error("Blocked tracking XHR");
-                }
-                return origOpen.apply(this, arguments);
-            };
-
-        })();
-        """
-        self.inject_script(
-            script,
-            injection_point=QWebEngineScript.DocumentCreation,
-            subframes=True)
-            
     def inject_stealth_storage_block(self):
         # Memory-only storage shim: prevents crashes while avoiding persistence
         script = r"""
@@ -2513,140 +2393,7 @@ class HardenedWebPage(QWebEnginePage):
         }})();
         """
         self.inject_script(js, injection_point=QWebEngineScript.DocumentCreation, subframes=True)
-        
-    import json
-
-    def build_canvas_spoof_js(self, seed: int) -> str:
-        # IMPORTANT: keep this as a normal string (not executed in Python)
-        return f"""
-(() => {{
-  if (window.__darkelf_canvas_spoof_installed) return;
-  window.__darkelf_canvas_spoof_installed = true;
-
-  const TAB_SEED = {int(seed)} >>> 0;
-
-  function hash32(str) {{
-    let h = 2166136261 >>> 0;
-    for (let i = 0; i < str.length; i++) {{
-      h ^= str.charCodeAt(i);
-      h = Math.imul(h, 16777619);
-    }}
-    return h >>> 0;
-  }}
-
-  const host = (location && location.hostname) ? location.hostname : "";
-  const DOMAIN_SEED = hash32(host);
-  const SEED = (TAB_SEED ^ DOMAIN_SEED) >>> 0;
-
-  function noiseByte(i) {{
-    let x = (SEED ^ i) >>> 0;
-    x ^= x >>> 16;
-    x = Math.imul(x, 0x7feb352d) >>> 0;
-    x ^= x >>> 15;
-    x = Math.imul(x, 0x846ca68b) >>> 0;
-    x ^= x >>> 16;
-    return x & 0xff;
-  }}
-
-  function applyNoiseToImageData(imageData) {{
-    try {{
-      const d = imageData.data;
-      for (let i = 0; i < d.length; i += 4) {{
-        const n = (noiseByte(i) % 7) - 3; // [-3..+3]
-        d[i]   = (d[i]   + n) & 0xff;
-        d[i+1] = (d[i+1] + n) & 0xff;
-        d[i+2] = (d[i+2] + n) & 0xff;
-      }}
-    }} catch(e) {{}}
-    return imageData;
-  }}
-
-  function safePatch(obj, name, wrapFactory) {{
-    try {{
-      const orig = obj && obj[name];
-      if (!orig || orig.__darkelf_patched) return;
-      const wrapped = wrapFactory(orig);
-      wrapped.__darkelf_patched = true;
-      Object.defineProperty(obj, name, {{
-        value: wrapped,
-        configurable: true,
-        writable: true
-      }});
-    }} catch(e) {{}}
-  }}
-
-  safePatch(CanvasRenderingContext2D.prototype, "getImageData", (orig) => function(...args) {{
-    const img = orig.apply(this, args);
-    return applyNoiseToImageData(img);
-  }});
-
-  function withTempNoisedPixels(canvas, fn) {{
-    try {{
-      const ctx = canvas.getContext && canvas.getContext("2d");
-      if (!ctx) return fn();
-
-      const w = canvas.width|0, h = canvas.height|0;
-      if (!w || !h) return fn();
-
-      const orig = ctx.getImageData(0, 0, w, h);
-      const copy = ctx.createImageData(orig.width, orig.height);
-      copy.data.set(orig.data);
-
-      applyNoiseToImageData(copy);
-      ctx.putImageData(copy, 0, 0);
-      try {{
-        return fn();
-      }} finally {{
-        ctx.putImageData(orig, 0, 0);
-      }}
-    }} catch(e) {{
-      return fn();
-    }}
-  }}
-
-  safePatch(HTMLCanvasElement.prototype, "toDataURL", (orig) => function(...args) {{
-    return withTempNoisedPixels(this, () => orig.apply(this, args));
-  }});
-
-  safePatch(HTMLCanvasElement.prototype, "toBlob", (orig) => function(cb, type, quality) {{
-    return withTempNoisedPixels(this, () => orig.call(this, cb, type, quality));
-  }});
-
-  function patchWebGL(protoName) {{
-    const P = window[protoName] && window[protoName].prototype;
-    if (!P) return;
-
-    safePatch(P, "readPixels", (orig) => function(x, y, w, h, format, type, pixels) {{
-      const rv = orig.apply(this, arguments);
-      try {{
-        if (pixels && pixels.length && typeof pixels[0] === "number") {{
-          const step = Math.max(4, Math.floor(pixels.length / 64));
-          for (let i = 0; i < pixels.length; i += step) {{
-            pixels[i] = (pixels[i] + ((noiseByte(i) % 5) - 2)) & 0xff;
-          }}
-        }}
-      }} catch(e) {{}}
-      return rv;
-    }});
-  }}
-
-  patchWebGL("WebGLRenderingContext");
-  patchWebGL("WebGL2RenderingContext");
-
-}})();
-"""
-
-    def inject_build_canvas_spoof_js(self):
-        js = self.build_canvas_spoof_js(self._canvas_seed)
-        self.inject_script(
-            js,
-            injection_point=QWebEngineScript.DocumentCreation,
-            subframes=True,
-            name="__darkelf_canvas_spoofer__"
-        )
-
-
-  
+          
     def inject_all_scripts(self):
         self.stealth_webrtc_block()
         self.block_webrtc_sdp_logging()
@@ -2659,15 +2406,9 @@ class HardenedWebPage(QWebEnginePage):
         self.inject_timezone_chicago_offset()
         self.inject_font_protection()
         self.inject_uach_js_spoof()
-        #self.inject_dom_overlay_blocker()
-        #self.inject_exitfullscreen_polyfill()
         self.inject_resize_observer_suppressor()
-        #self.inject_media_removal()
-        #self.inject_strict_csp()
-        #self.inject_fetch_guard()
         self.inject_stealth_storage_block()
         self.inject_iframe_environment_harmonizer()
-        self.inject_build_canvas_spoof_js()
 
     def acceptNavigationRequest(self, url, navtype, isMainFrame):
         if url.scheme() == "file":
@@ -2687,6 +2428,10 @@ class HardenedWebPage(QWebEnginePage):
             page = HardenedWebPage(view)
         view.setPage(page)
         page._parent_view = view
+        page.fullScreenRequested.connect(
+            view.window().handle_fullscreen
+        )
+        
         if has_tabs:
             idx = main_window.tabs.addTab(view, "New Tab")
             main_window.tabs.setCurrentIndex(idx)
@@ -2894,6 +2639,7 @@ class DarkelfBrowser(QMainWindow):
 
         page = HardenedWebPage(view, profile, canvas_seed=canvas_seed)
         view.setPage(page)
+        page.fullScreenRequested.connect(self.handle_fullscreen)
 
         # ---- EasyList Cosmetic Injection ----
         def apply_easylist_cosmetics(v=view):
@@ -3001,6 +2747,16 @@ class DarkelfBrowser(QMainWindow):
         for i in reversed(range(self.tabs.count())):
             self.close_tab(i)
             
+    def handle_fullscreen(self, request):
+        if request.toggleOn():
+            self._fullscreen_view = request.originatingPage().view()
+            self._fullscreen_view.setParent(None)
+            self._fullscreen_view.showFullScreen()
+        else:
+            self._fullscreen_view.showNormal()
+            self._fullscreen_view.setParent(self.tabs.currentWidget())
+        request.accept()
+
     def _close_tab_current(self):
         self.close_tab(self.tabs.currentIndex())
 
@@ -3170,14 +2926,6 @@ class DarkelfBrowser(QMainWindow):
 
         
 if __name__ == "__main__":
-
-    # 🔥 Fix context leak + shader cache persistence
-    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
-        "--disable-site-isolation-trials "
-        "--disable-features=IsolateOrigins,site-per-process "
-        "--disable-gpu-shader-disk-cache "
-        "--disable-gpu-program-cache "
-    )
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
