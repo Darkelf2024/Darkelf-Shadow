@@ -4,7 +4,7 @@ import sys, os, uuid
 import tempfile
 import math
 import random
-from PySide6.QtCore import Qt, QUrl, QSize, QPointF, QRectF
+from PySide6.QtCore import Qt, QUrl, QUrlQuery, QSize, QPointF, QRectF
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLineEdit, QToolBar,
     QTabWidget, QTabBar, QMessageBox, QToolButton,
@@ -757,20 +757,21 @@ class EasyListEngine:
             )
 
         return "\n".join(lines)
-
+        
 class StealthInterceptor(QWebEngineUrlRequestInterceptor):
     def __init__(self, engine: EasyListEngine):
         super().__init__()
         self.engine = engine
+        self.hsts_hosts = set()  # remember HTTPS-capable hosts
 
     def interceptRequest(self, info):
-
         qurl = info.requestUrl()
         scheme = (qurl.scheme() or "").lower()
-        
-        if "browserleaks.com" in qurl.host():
-            return
+        host = (qurl.host() or "").lower()
 
+        # --------------------------------------------------
+        # 0️⃣ Skip safe/internal schemes
+        # --------------------------------------------------
         if scheme in ("data", "about", "chrome", "qrc", "blob", "view-source"):
             return
 
@@ -778,15 +779,64 @@ class StealthInterceptor(QWebEngineUrlRequestInterceptor):
             info.block(True)
             return
 
+        if "browserleaks.com" in host:
+            return
+
+        # --------------------------------------------------
+        # 1️⃣ Skip localhost / private IP ranges
+        # --------------------------------------------------
+        if host in ("localhost", "127.0.0.1") \
+           or host.startswith("192.168.") \
+           or host.startswith("10.") \
+           or host.startswith("172."):
+            return
+
+        # --------------------------------------------------
+        # 2️⃣ FORCE HTTPS (Smart Upgrade)
+        # --------------------------------------------------
+        if scheme == "http":
+            https_url = QUrl(qurl)
+            https_url.setScheme("https")
+            self.hsts_hosts.add(host)
+            info.redirect(https_url)
+            return
+
+        # Prevent HTTPS downgrade
+        if scheme == "http" and host in self.hsts_hosts:
+            https_url = QUrl(qurl)
+            https_url.setScheme("https")
+            info.redirect(https_url)
+            return
+
         req_url = qurl.toString()
         fp_url = info.firstPartyUrl().toString()
 
-    # Do NOT rewrite Amazon or WAF URLs
-        if "amazon." not in req_url and "awswaf.com" not in req_url:
-            cleaned = sanitize_url_clearurls(req_url)
-            if cleaned != req_url:
-                return
+        # --------------------------------------------------
+        # 3️⃣ Strip common tracking parameters
+        # --------------------------------------------------
+        tracking_params = {
+            "utm_source", "utm_medium", "utm_campaign",
+            "utm_term", "utm_content",
+            "fbclid", "gclid", "mc_eid"
+        }
 
+        query = QUrlQuery(qurl)
+        modified = False
+
+        for param in tracking_params:
+            if query.hasQueryItem(param):
+                query.removeAllQueryItems(param)
+                modified = True
+
+        if modified:
+            clean_url = QUrl(qurl)
+            clean_url.setQuery(query)
+            info.redirect(clean_url)
+            return
+
+        # --------------------------------------------------
+        # 4️⃣ Resource Type Detection (your existing logic)
+        # --------------------------------------------------
         rt = info.resourceType()
         type_map = {}
 
@@ -812,18 +862,23 @@ class StealthInterceptor(QWebEngineUrlRequestInterceptor):
             if hasattr(QWebEngineUrlRequestInfo.ResourceType, "ResourceTypeMainFrame"):
                 if rt == QWebEngineUrlRequestInfo.ResourceType.ResourceTypeMainFrame:
                     req_type = "document"
-                    
-        # Never rewrite main frame navigations
 
+        # --------------------------------------------------
+        # 5️⃣ ClearURLs sanitizing (keep your original logic)
+        # --------------------------------------------------
         if req_type and req_type not in ("document", "subdocument"):
             if "amazon." not in req_url and "awswaf.com" not in req_url:
                 cleaned = sanitize_url_clearurls(req_url)
                 if cleaned != req_url:
-                    #info.redirect(QUrl(cleaned))
+                    # Uncomment if you want active rewriting
+                    # info.redirect(QUrl(cleaned))
                     return
 
+        # --------------------------------------------------
+        # 6️⃣ EasyList Blocking (FIXED SIGNATURE)
+        # --------------------------------------------------
         try:
-            if self.engine.should_block(req_url, fp_url, req_type):
+            if self.engine and self.engine.should_block(req_url, fp_url, req_type):
                 print("BLOCKED:", req_type, fp_url, "->", req_url)
                 info.block(True)
                 return
@@ -2328,7 +2383,7 @@ class DarkelfBrowser(QMainWindow):
         self._hook_secure_downloads()
 
         QApplication.instance().aboutToQuit.connect(self._wipe_download_traces)
-
+                
     def on_url_entered(self):
         text = self.addr.text().strip()
         if not text:
@@ -2350,6 +2405,26 @@ class DarkelfBrowser(QMainWindow):
 
         self._add_tab(url=url)
         
+    def make_outline_lock_icon(self, color="#ffffff", size=16):
+        pix = QPixmap(size, size)
+        pix.fill(Qt.transparent)
+
+        painter = QPainter(pix)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        pen = QPen(QColor(color))
+        pen.setWidth(2)
+        painter.setPen(pen)
+
+        # Lock body
+        painter.drawRoundedRect(4, 7, 8, 7, 2, 2)
+
+        # Lock shackle
+        painter.drawArc(4, 2, 8, 10, 0 * 16, 180 * 16)
+
+        painter.end()
+        return QIcon(pix)
+    
     def _make_toolbar(self):
         tb = QToolBar()
         tb.setMovable(False)
@@ -2387,6 +2462,13 @@ class DarkelfBrowser(QMainWindow):
         self.addr.returnPressed.connect(self.on_url_entered)
         tb.addWidget(self.addr)
         tb.addSeparator()
+        
+        # ADD LOCK ICON HERE
+        self.lock_action = self.addr.addAction(
+            self.make_outline_lock_icon("#ffffff", 16),
+            QLineEdit.LeadingPosition
+        )
+        self.lock_action.setVisible(False)
 
         tb.addAction(self.zoom_out_action)
         tb.addAction(self.zoom_in_action)
@@ -2484,6 +2566,8 @@ class DarkelfBrowser(QMainWindow):
         page = HardenedWebPage(view, profile, canvas_seed=canvas_seed)
         view.setPage(page)
         page.fullScreenRequested.connect(self.handle_fullscreen)
+        
+        
 
         # ---- EasyList Cosmetic Injection ----
         def apply_easylist_cosmetics(v=view):
@@ -2632,12 +2716,35 @@ class DarkelfBrowser(QMainWindow):
             
     def _sync_urlbar(self, url=None):
         v = self.current_view()
-        if not v: return
-        u = v.url().toString() if url is None else url.toString()
+        if not v:
+            return
+
+        qurl = v.url() if url is None else url
+        u = qurl.toString()
+
         if u.startswith("data:text/html"):
             self.addr.setText("")
+            self.lock_action.setVisible(False)
+            return
+
+        self.addr.setText(u)
+
+        if qurl.scheme() == "https":
+            self.lock_action.setVisible(True)
+            self.addr.setStyleSheet("""
+                QLineEdit {
+                    color: #00ff66;
+                    font-weight: bold;
+                }
+            """)
         else:
-            self.addr.setText(u)
+            self.lock_action.setVisible(False)
+            self.addr.setStyleSheet("""
+                QLineEdit {
+                    color: #eafaf0;
+                    font-weight: normal;
+                }
+            """)
             
     def toggle_javascript(self):
         enabled = self.java_action.isChecked()
@@ -2804,6 +2911,11 @@ if __name__ == "__main__":
     profile.setHttpCacheType(QWebEngineProfile.MemoryHttpCache)
     profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
     profile.setHttpAcceptLanguage("en-US,en;q=0.9")
+    
+    profile.setHttpUserAgent(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
+    )
     
     settings = profile.settings()
         
