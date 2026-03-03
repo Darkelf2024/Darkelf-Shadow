@@ -91,6 +91,9 @@ class HardenedWebPage(QWebEnginePage):
             page = HardenedWebPage(view)
         view.setPage(page)
         page._parent_view = view
+        page.fullScreenRequested.connect(
+            view.window().handle_fullscreen
+        )       
         if has_tabs:
             idx = main_window.tabs.addTab(view, "New Tab")
             main_window.tabs.setCurrentIndex(idx)
