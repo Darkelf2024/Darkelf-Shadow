@@ -1,3 +1,4 @@
+import platform as _platform
 import secrets
 import hashlib
 import sys, os, uuid
@@ -40,6 +41,9 @@ except:
     def urlparse(s): return type("U", (), {"netloc": "", "port": None})()
 import urllib.request
 from urllib.error import URLError, HTTPError
+    
+devnull = open(os.devnull, 'w')
+os.dup2(devnull.fileno(), sys.stderr.fileno())
 
 # ===================== Secure No-Trace Downloads helpers =====================
 
@@ -1411,6 +1415,26 @@ def make_nuke_icon(hex_color: str, size: int) -> QIcon:
     p.end()
     return QIcon(pm)
     
+def detect_nav_platform():
+    system = _platform.system()
+    machine = _platform.machine().lower()
+
+    if system == "Darwin":
+        return "MacIntel"
+
+    if system == "Windows":
+        return "Win32"
+
+    if system == "Linux":
+        if "aarch64" in machine or "arm" in machine:
+            return "Linux aarch64"
+        if "x86_64" in machine or "amd64" in machine:
+            return "Linux x86_64"
+        return "Linux"
+
+    return sys.platform
+
+
 HOMEPAGE = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1420,7 +1444,7 @@ HOMEPAGE = f"""<!DOCTYPE html>
 
 <!-- CSP for Meta (no frame-ancestors, use spaces not semicolons!) -->
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'self' data: style-src 'unsafe-inline' script-src 'unsafe-inline' img-src 'self' data: form-action https://duckduckgo.com base-uri 'none' object-src 'none'">
+      content="default-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:; form-action https://duckduckgo.com; base-uri 'none'; object-src 'none';">
 
 <style>
 :root {{
@@ -2188,111 +2212,60 @@ class HardenedWebPage(QWebEnginePage):
             script,
             injection_point=QWebEngineScript.DocumentCreation,
             subframes=True)
-            
+
     def inject_iframe_environment_harmonizer(self):
-        js = r"""
-        (() => {
+        spoof = {
+            "platform": detect_nav_platform(),
+            "vendor": "Google Inc.",
+            # keep UA as whatever QtWebEngine currently uses:
+            "userAgent": None,
+            "deviceMemory": None,
+            "hardwareConcurrency": None,
+            "languages": ["en-US", "en"],
+            "language": "en-US",
+            "maxTouchPoints": 0,
+        }
+
+        js = f"""
+        (() => {{
           if (window.__darkelf_iframe_harmonizer) return;
           window.__darkelf_iframe_harmonizer = true;
 
-          const SPOOF = {
-            platform: "MacIntel",
-            vendor: "Google Inc.",
-            userAgent: navigator.userAgent,   // or hardcode your UA string
-            deviceMemory: undefined,
-            hardwareConcurrency: (Math.floor(Math.random() * 11) + 2),
-            languages: ["en-US", "en"],
-            language: "en-US",
-            maxTouchPoints: 0,
-          };
+          const SPOOF = {json.dumps(spoof)};
 
-          function def(obj, prop, getter) {
-            try {
-              Object.defineProperty(obj, prop, { get: getter, configurable: true });
-          } catch (e) {}
-        }
+          // Fill dynamic fields at runtime
+          SPOOF.userAgent = navigator.userAgent;
+          SPOOF.hardwareConcurrency = (Math.floor(Math.random() * 11) + 2);
 
-        function applyToWindow(w) {
-          if (!w || w.__darkelf_spoofed) return;
-          try { w.__darkelf_spoofed = true; } catch(e) {}
+          function def(obj, prop, getter) {{
+            try {{
+              Object.defineProperty(obj, prop, {{ get: getter, configurable: true }});
+            }} catch (e) {{}}
+          }}
 
-          try {
-            const n = w.navigator;
-            if (n) {
-              def(n, "platform", () => SPOOF.platform);
-              def(n, "vendor", () => SPOOF.vendor);
-              def(n, "userAgent", () => SPOOF.userAgent);
+          function applyToWindow(w) {{
+            if (!w || w.__darkelf_spoofed) return;
+            try {{ w.__darkelf_spoofed = true; }} catch(e) {{}}
 
-              def(n, "deviceMemory", () => SPOOF.deviceMemory);
-              def(n, "hardwareConcurrency", () => SPOOF.hardwareConcurrency);
+            try {{
+              const n = w.navigator;
+              if (n) {{
+                def(n, "platform", () => SPOOF.platform);
+                def(n, "vendor", () => SPOOF.vendor);
+                def(n, "userAgent", () => SPOOF.userAgent);
+                def(n, "deviceMemory", () => SPOOF.deviceMemory);
+                def(n, "hardwareConcurrency", () => SPOOF.hardwareConcurrency);
+                def(n, "languages", () => SPOOF.languages.slice());
+                def(n, "language", () => SPOOF.language);
+                def(n, "maxTouchPoints", () => SPOOF.maxTouchPoints);
+              }}
+            }} catch(e) {{}}
+          }}
 
-              def(n, "languages", () => SPOOF.languages.slice());
-              def(n, "language", () => SPOOF.language);
-
-              def(n, "maxTouchPoints", () => SPOOF.maxTouchPoints);
-            }
-          } catch(e) {}
-
-          // If BrowserLeaks flags screen mismatches, you can enable these:
-          // try {
-          //   const s = w.screen;
-          //   if (s) {
-          //     def(s, "availWidth",  () => screen.availWidth);
-          //     def(s, "availHeight", () => screen.availHeight);
-          //   }
-          // } catch(e) {}
-        }
-
-        function patchAllIframes() {
-          document.querySelectorAll("iframe").forEach((f) => {
-            try { applyToWindow(f.contentWindow); } catch(e) {}
-          });
-        }
-
-        // Apply to main window now
-        applyToWindow(window);
-
-        // Apply to existing iframes ASAP
-        patchAllIframes();
-
-        // Watch for new iframes
-        const mo = new MutationObserver((muts) => {
-          for (const m of muts) {
-            for (const node of m.addedNodes) {
-              if (!node || !node.tagName) continue;
-
-              if (node.tagName === "IFRAME") {
-                try { applyToWindow(node.contentWindow); } catch(e) {}
-                try {
-                  node.addEventListener("load", () => {
-                    try { applyToWindow(node.contentWindow); } catch(e) {}
-                  }, { once: true });
-                } catch(e) {}
-                continue;
-              }
-
-              if (node.querySelectorAll) {
-                node.querySelectorAll("iframe").forEach((f) => {
-                  try { applyToWindow(f.contentWindow); } catch(e) {}
-                });
-              }
-            }
-          }
-        });
-
-        try {
-          mo.observe(document.documentElement || document, { childList: true, subtree: true });
-        } catch(e) {}
-
-        if (document.readyState === "loading") {
-          document.addEventListener("DOMContentLoaded", patchAllIframes, { once: true });
-        }
-      })();
-      """
-        self.inject_script(
-            js,
-            injection_point=QWebEngineScript.DocumentCreation,
-            subframes=True)
+          applyToWindow(window);
+        }})();
+        """
+        self.inject_script(js, injection_point=QWebEngineScript.DocumentCreation, subframes=True)
                       
     def inject_all_scripts(self):
         self.stealth_webrtc_block()
@@ -2383,7 +2356,7 @@ class DarkelfBrowser(QMainWindow):
         self._hook_secure_downloads()
 
         QApplication.instance().aboutToQuit.connect(self._wipe_download_traces)
-                
+        
     def on_url_entered(self):
         text = self.addr.text().strip()
         if not text:
@@ -2469,6 +2442,18 @@ class DarkelfBrowser(QMainWindow):
             QLineEdit.LeadingPosition
         )
         self.lock_action.setVisible(False)
+        
+        self.addr.setStyleSheet("""
+        QLineEdit {
+            background-color: #12141b;
+            color: #eafaf0;
+            border: 1px solid #34C759;
+            border-radius: 6px;
+            padding: 4px 8px;
+            selection-background-color: #34C759;
+            selection-color: #0a0b10;
+        }
+        """)
 
         tb.addAction(self.zoom_out_action)
         tb.addAction(self.zoom_in_action)
