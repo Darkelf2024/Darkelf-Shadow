@@ -108,9 +108,9 @@ os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = existing + (
     " --disable-geolocation"
     " --disable-accelerated-2d-canvas"
     " --disable-software-rasterizer"
-    "--disable-site-isolation-trials"
-    "--disable-features=IsolateOrigins,site-per-process"
-    "--disable-web-security"
+    " --disable-site-isolation-trials"
+    " --disable-features=IsolateOrigins,site-per-process"
+    " --disable-web-security"
 )
 
 EASYLIST_URLS = [
@@ -1182,6 +1182,7 @@ TOP 10 THREAT DOMAINS:
             print(self.get_threat_report())
         except Exception as e:
             print("[MiniAI] Report failed:", e)
+            
 # --- Custom Icon helpers (ported from fixed2) ---
 def make_icon(color="#34C759", size=24):
     pix = QPixmap(size, size)
@@ -1557,87 +1558,6 @@ class HardenedWebPage(QWebEnginePage):
         script_obj.setWorldId(QWebEngineScript.MainWorld)
         scripts.insert(script_obj)
         
-    def inject_youtube_ad_patch(self):
-        script = r"""
-        (() => {
-            if (window.__darkelf_yt_patch) return;
-            window.__darkelf_yt_patch = true;
-
-            function stripAds(obj) {
-                if (!obj || typeof obj !== "object") return;
-                delete obj.adPlacements;
-                delete obj.playerAds;
-                delete obj.adSlots;
-                delete obj.adBreakHeartbeatParams;
-                delete obj.adSafetyReason;
-                delete obj.ads;
-            }
-
-            // Patch initial player objects
-            Object.defineProperty(window, "ytInitialPlayerResponse", {
-                set(v) {
-                    stripAds(v);
-                    this._ytResp = v;
-                },
-                get() { return this._ytResp; }
-            });
-
-            Object.defineProperty(window, "ytInitialData", {
-                set(v) {
-                    stripAds(v);
-                    this._ytData = v;
-                },
-                get() { return this._ytData; }
-            });
-
-            // Patch fetch()
-            const origFetch = window.fetch;
-            window.fetch = async function(...args) {
-                const res = await origFetch.apply(this, args);
-                try {
-                    const clone = res.clone();
-                    const text = await clone.text();
-                    if (text.includes("adPlacements") || text.includes("playerAds")) {
-                        const cleaned = text
-                            .replace(/"adPlacements":\[[^\]]*\]/g, '"adPlacements":[]')
-                            .replace(/"playerAds":\[[^\]]*\]/g, '"playerAds":[]');
-                        return new Response(cleaned, {
-                            status: res.status,
-                            statusText: res.statusText,
-                            headers: res.headers
-                        });
-                    }
-                } catch(e) {}
-                return res;
-            };
-
-            // Patch XMLHttpRequest
-            const origOpen = XMLHttpRequest.prototype.open;
-            XMLHttpRequest.prototype.open = function(...args) {
-                this.addEventListener("readystatechange", function() {
-                    try {
-                        if (this.responseText &&
-                            (this.responseText.includes("adPlacements") ||
-                            this.responseText.includes("playerAds"))) {
-                            Object.defineProperty(this, "responseText", {
-                                value: this.responseText
-                                    .replace(/"adPlacements":\[[^\]]*\]/g, '"adPlacements":[]')
-                                    .replace(/"playerAds":\[[^\]]*\]/g, '"playerAds":[]')
-                            });
-                        }
-                    } catch(e){}
-                });
-                return origOpen.apply(this, args);
-            };
-
-        })();
-        """
-
-        self.inject_script(
-            script,
-            injection_point=QWebEngineScript.DocumentCreation,
-            subframes=True)
-
     # --- Inject WebRTC block, geo override, and canvas noise all at DocumentCreation ---
     def stealth_webrtc_block(self):
         script = """
@@ -2749,12 +2669,10 @@ class DarkelfBrowser(QMainWindow):
             
     def handle_fullscreen(self, request):
         if request.toggleOn():
-            self._fullscreen_view = request.originatingPage().view()
-            self._fullscreen_view.setParent(None)
-            self._fullscreen_view.showFullScreen()
+            self.showFullScreen()
         else:
-            self._fullscreen_view.showNormal()
-            self._fullscreen_view.setParent(self.tabs.currentWidget())
+            self.showNormal()
+
         request.accept()
 
     def _close_tab_current(self):
@@ -2978,7 +2896,7 @@ if __name__ == "__main__":
     settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanAccessClipboard, False)
     settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, False)
     settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, False)
-    settings.setAttribute(QWebEngineSettings.WebAttribute.FullScreenSupportEnabled, False)
+    settings.setAttribute(QWebEngineSettings.WebAttribute.FullScreenSupportEnabled, True)
 
     # ===== GLOBAL SCRIPT INJECTION =====
     script = QWebEngineScript()
