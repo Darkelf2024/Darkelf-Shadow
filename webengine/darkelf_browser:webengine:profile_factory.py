@@ -11,10 +11,7 @@ def create_hardened_profile():
     profile.setHttpAcceptLanguage("en-US,en;q=0.9")
 
     settings = profile.settings()
-    profile.setHttpUserAgent(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    )
+
     settings.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
     settings.setAttribute(QWebEngineSettings.WebAttribute.PluginsEnabled, False)
     settings.setAttribute(QWebEngineSettings.WebAttribute.HyperlinkAuditingEnabled, False)
