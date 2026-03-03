@@ -94,24 +94,28 @@ import os
 existing = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
 
 os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = existing + (
-    " --disable-features=ServiceWorker"
-    " --disable-features=WebRtcHideLocalIpsWithMdns"
-    " --disable-gpu-shader-disk-cache"
     " --disable-background-networking"
     " --disable-sync"
     " --metrics-recording-only"
+    " --disable-default-apps"
     " --no-first-run"
+    " --disable-features=UserAgentClientHint"
+    " --disable-features=UserAgentReduction"
+    " --disable-features=ReduceUserAgentMinorVersion"
+    " --disable-features=WebRtcHideLocalIpsWithMdns"
     " --force-webrtc-ip-handling-policy=disable_non_proxied_udp"
     " --webrtc-ip-handling-policy=disable_non_proxied_udp"
     " --disable-webrtc"
-    " --disable-media-stream"
     " --disable-geolocation"
-    " --disable-accelerated-2d-canvas"
-    " --disable-software-rasterizer"
-    " --disable-site-isolation-trials"
-    " --disable-features=IsolateOrigins,site-per-process"
-    " --disable-web-security"
+    " --disable-breakpad"
+    " --disable-domain-reliability"
+    " --disable-client-side-phishing-detection"
+    " --disable-component-update"
+    " --disable-extensions"
+    " --disable-gpu-shader-disk-cache"
+    " --disable-logging"
 )
+
 
 EASYLIST_URLS = [
     # Core
@@ -754,43 +758,12 @@ class EasyListEngine:
 
         return "\n".join(lines)
 
-# --- UA spoof constants (macOS example; change if you want Windows UA) ---
-SPOOF_UA = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-)
-
-SPOOF_CH_UA = '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"'
-SPOOF_CH_UA_MOBILE = "?0"
-SPOOF_CH_UA_PLATFORM = '"macOS"'
-SPOOF_CH_UA_FULL_VERSION = '"122.0.0.0"'
-SPOOF_CH_UA_FULL_VERSION_LIST = (
-    '"Chromium";v="122.0.0.0", "Not(A:Brand";v="24.0.0.0", "Google Chrome";v="122.0.0.0"'
-)
-
 class StealthInterceptor(QWebEngineUrlRequestInterceptor):
     def __init__(self, engine: EasyListEngine):
         super().__init__()
         self.engine = engine
 
     def interceptRequest(self, info):
-        # 1) Always set spoof headers first (even for browserleaks)
-        try:
-            info.setHttpHeader(b"User-Agent", SPOOF_UA.encode("utf-8"))
-
-            # UA-CH (what's leaking "134")
-            info.setHttpHeader(b"Sec-CH-UA", SPOOF_CH_UA.encode("utf-8"))
-            info.setHttpHeader(b"Sec-CH-UA-Mobile", SPOOF_CH_UA_MOBILE.encode("utf-8"))
-            info.setHttpHeader(b"Sec-CH-UA-Platform", SPOOF_CH_UA_PLATFORM.encode("utf-8"))
-            info.setHttpHeader(b"Sec-CH-UA-Full-Version", SPOOF_CH_UA_FULL_VERSION.encode("utf-8"))
-            info.setHttpHeader(b"Sec-CH-UA-Full-Version-List", SPOOF_CH_UA_FULL_VERSION_LIST.encode("utf-8"))
-
-            # Optional entropy hints some sites request:
-            info.setHttpHeader(b"Sec-CH-UA-Arch", b'"x86"')
-            info.setHttpHeader(b"Sec-CH-UA-Bitness", b'"64"')
-            info.setHttpHeader(b"Sec-CH-UA-Model", b'""')
-        except Exception:
-            pass
 
         qurl = info.requestUrl()
         scheme = (qurl.scheme() or "").lower()
@@ -846,7 +819,7 @@ class StealthInterceptor(QWebEngineUrlRequestInterceptor):
             if "amazon." not in req_url and "awswaf.com" not in req_url:
                 cleaned = sanitize_url_clearurls(req_url)
                 if cleaned != req_url:
-                    info.redirect(QUrl(cleaned))
+                    #info.redirect(QUrl(cleaned))
                     return
 
         try:
@@ -2168,7 +2141,7 @@ class HardenedWebPage(QWebEnginePage):
           window.__darkelf_iframe_harmonizer = true;
 
           const SPOOF = {
-            platform: "Win32",
+            platform: "MacIntel",
             vendor: "Google Inc.",
             userAgent: navigator.userAgent,   // or hardcode your UA string
             deviceMemory: undefined,
@@ -2265,55 +2238,7 @@ class HardenedWebPage(QWebEnginePage):
             js,
             injection_point=QWebEngineScript.DocumentCreation,
             subframes=True)
-            
-    def inject_uach_js_spoof(self):
-        js = f"""
-        (() => {{
-          const UA = {json.dumps(SPOOF_UA)};
-          const UAData = {{
-            brands: [
-              {{ brand: "Chromium", version: "122" }},
-              {{ brand: "Not(A:Brand", version: "24" }},
-              {{ brand: "Google Chrome", version: "122" }}
-            ],
-            mobile: false,
-            platform: "macOS",
-            getHighEntropyValues: async (hints) => {{
-              const out = {{}};
-              (hints || []).forEach((k) => {{
-                if (k === "architecture") out.architecture = "x86";
-                else if (k === "bitness") out.bitness = "64";
-                else if (k === "model") out.model = "";
-                else if (k === "platform") out.platform = "macOS";
-                else if (k === "platformVersion") out.platformVersion = "10.15.7";
-                else if (k === "uaFullVersion") out.uaFullVersion = "122.0.0.0";
-                else if (k === "fullVersionList") out.fullVersionList = [
-                  {{ brand: "Chromium", version: "122.0.0.0" }},
-                  {{ brand: "Not(A:Brand", version: "24.0.0.0" }},
-                  {{ brand: "Google Chrome", version: "122.0.0.0" }}
-                ];
-              }});
-              return out;
-            }}
-          }};
-
-          function def(obj, prop, value) {{
-            try {{
-              Object.defineProperty(obj, prop, {{ get: () => value, configurable: true }});
-            }} catch(e) {{}}
-          }}
-
-          try {{
-            def(navigator, "userAgent", UA);
-            def(navigator, "vendor", "Google Inc.");
-            if (navigator.userAgentData) {{
-              def(navigator, "userAgentData", UAData);
-            }}
-          }} catch(e) {{}}
-        }})();
-        """
-        self.inject_script(js, injection_point=QWebEngineScript.DocumentCreation, subframes=True)
-          
+                      
     def inject_all_scripts(self):
         self.stealth_webrtc_block()
         self.block_webrtc_sdp_logging()
@@ -2325,7 +2250,6 @@ class HardenedWebPage(QWebEnginePage):
         self.inject_webgl_fingerprint_per_domain()
         self.inject_timezone_chicago_offset()
         self.inject_font_protection()
-        self.inject_uach_js_spoof()
         self.inject_resize_observer_suppressor()
         self.inject_stealth_storage_block()
         self.inject_iframe_environment_harmonizer()
@@ -2880,15 +2804,9 @@ if __name__ == "__main__":
     profile.setHttpCacheType(QWebEngineProfile.MemoryHttpCache)
     profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
     profile.setHttpAcceptLanguage("en-US,en;q=0.9")
-
+    
     settings = profile.settings()
-    
-        # after profile is created (in __main__):
-    profile.setHttpUserAgent(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    )
-    
+        
     settings.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
     settings.setAttribute(QWebEngineSettings.WebAttribute.PluginsEnabled, False)
     settings.setAttribute(QWebEngineSettings.WebAttribute.HyperlinkAuditingEnabled, False)
