@@ -5,11 +5,11 @@ import sys, os, uuid
 import tempfile
 import math
 import random
-from PySide6.QtCore import Qt, QUrl, QUrlQuery, QSize, QPointF, QRectF
+from PySide6.QtCore import Qt, QUrl, QUrlQuery, QSize, QPointF, QRectF, QTimer
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLineEdit, QToolBar,
     QTabWidget, QTabBar, QMessageBox, QToolButton,
-    QVBoxLayout, QHBoxLayout, QWidget, QFileDialog
+    QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QProgressDialog
 )
 from PySide6.QtGui import (
     QAction, QIcon, QPixmap, QPainter, QColor,
@@ -22,9 +22,9 @@ from PySide6.QtWebEngineCore import (
     QWebEngineScript,
     QWebEngineSettings,
     QWebEngineUrlRequestInfo,
-    QWebEngineUrlRequestInterceptor
+    QWebEngineUrlRequestInterceptor,
+    QWebEngineDownloadRequest
 )
-import json
 
 # ---- Install ad/tracker interceptor ----
 import json
@@ -42,23 +42,17 @@ except:
 import urllib.request
 from urllib.error import URLError, HTTPError
     
-devnull = open(os.devnull, 'w')
-os.dup2(devnull.fileno(), sys.stderr.fileno())
+#devnull = open(os.devnull, 'w')
+#os.dup2(devnull.fileno(), sys.stderr.fileno())
 
 # ===================== Secure No-Trace Downloads helpers =====================
 
 def _safe_download_dir() -> str:
-    """
-    Per-session no-trace download directory.
-    Deleted on exit and on 'Nuke'.
-    """
-    root = os.path.join(tempfile.gettempdir(), "darkelf_downloads")
-    os.makedirs(root, exist_ok=True)
+    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+    folder = os.path.join(desktop, "Darkelf Temp Folder")
+    os.makedirs(folder, exist_ok=True)
+    return folder
 
-    sess = uuid.uuid4().hex
-    d = os.path.join(root, sess)
-    os.makedirs(d, exist_ok=True)
-    return d
 
 def _randomized_filename(suggested: str) -> str:
     suggested = (suggested or "download").strip()
@@ -2354,7 +2348,7 @@ class DarkelfBrowser(QMainWindow):
         self._download_dir = _safe_download_dir()
         self._downloaded_files: list[str] = []
         self._hook_secure_downloads()
-
+        
         QApplication.instance().aboutToQuit.connect(self._wipe_download_traces)
         
     def on_url_entered(self):
@@ -2786,67 +2780,60 @@ class DarkelfBrowser(QMainWindow):
             print(f"[Darkelf] Tor cookie authentication failed: {e}")
             
     def _hook_secure_downloads(self):
-        # QtWebEngine will emit this for any download (normal link, blob, etc.)
+        try:
+            self.shared_profile.downloadRequested.disconnect(self._handle_download_requested)
+        except:
+            pass
+
         self.shared_profile.downloadRequested.connect(self._handle_download_requested)
 
+
     def _handle_download_requested(self, item):
-        """
-        Secure download handler.
-        item is a QWebEngineDownloadRequest (Qt6).
-        """
-        try:
-            url = item.url().toString()
-            scheme = (item.url().scheme() or "").lower()
-            # Block weird schemes
-            if scheme not in ("http", "https", "blob", "data"):
-                item.cancel()
-                return
 
-            # Suggested file name from server
-            suggested = ""
-            try:
-                suggested = item.suggestedFileName()
-            except Exception:
-                pass
+        # Generate randomized filename
+        filename = _randomized_filename(item.downloadFileName())
 
-            # Always randomize name if saving in no-trace dir
-            fname = _randomized_filename(suggested)
-            dest = os.path.join(self._download_dir, fname)
+        # Force Darkelf Temp Folder
+        folder = self._download_dir
 
-            # Optional: ask user where to save.
-            # If you want *pure no-trace*, comment this block out.
-            ask_user = True
-            if ask_user:
-                picked, _ = QFileDialog.getSaveFileName(
-                    self,
-                    "Save download (No-trace mode)",
-                    dest
-                )
-                if not picked:
-                    item.cancel()
-                    return
-                dest = picked
+        item.setDownloadDirectory(folder)
+        item.setDownloadFileName(filename)
 
-            # Force destination + accept
-            item.setDownloadDirectory(os.path.dirname(dest))
-            item.setDownloadFileName(os.path.basename(dest))
-            item.accept()
+        # Start download
+        item.accept()
 
-            # Track for cleanup
-            self._downloaded_files.append(dest)
+        progress = QProgressDialog(
+            f"Downloading {filename}...",
+            "Cancel",
+            0,
+            100,
+            self
+        )
 
-            # If the download fails/finishes, you can log status here
-            try:
-                item.finished.connect(lambda: None)
-            except Exception:
-                pass
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
 
-        except Exception as e:
-            try:
-                item.cancel()
-            except Exception:
-                pass
-            print("Download handler error:", e)
+        def update_progress():
+            total = item.totalBytes()
+            received = item.receivedBytes()
+            if total > 0:
+                percent = int((received / total) * 100)
+                progress.setValue(percent)
+
+        item.receivedBytesChanged.connect(update_progress)
+        item.totalBytesChanged.connect(update_progress)
+
+    def check_state(state):
+        if state == QWebEngineDownloadRequest.DownloadCompleted:
+            progress.setValue(100)
+            QTimer.singleShot(400, progress.close)  # keep visible 0.4 sec
+        elif state == QWebEngineDownloadRequest.DownloadCancelled:
+            progress.close()
+
+        item.stateChanged.connect(check_state)
+
+        progress.canceled.connect(item.cancel)
 
     def _wipe_download_traces(self):
         """
