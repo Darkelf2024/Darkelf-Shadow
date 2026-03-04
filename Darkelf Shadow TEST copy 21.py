@@ -42,8 +42,8 @@ except:
 import urllib.request
 from urllib.error import URLError, HTTPError
     
-devnull = open(os.devnull, 'w')
-os.dup2(devnull.fileno(), sys.stderr.fileno())
+#devnull = open(os.devnull, 'w')
+#os.dup2(devnull.fileno(), sys.stderr.fileno())
 
 # ===================== Secure No-Trace Downloads helpers =====================
 
@@ -2661,6 +2661,22 @@ class DarkelfBrowser(QMainWindow):
 
         QApplication.instance().aboutToQuit.connect(self._wipe_download_traces)
         
+        self.setup_hotkeys()
+
+    def new_tab(self):
+        self._add_tab(home=True)
+
+        
+    def close_tab(self):
+        i = self.tabs.currentIndex()
+        if i >= 0:
+            self.tabs.removeTab(i)
+            
+    def reload_page(self):
+        view = self.tabs.currentWidget()
+        if view:
+            view.reload()
+        
     def on_url_entered(self):
         text = self.addr.text().strip()
         if not text:
@@ -2856,8 +2872,6 @@ class DarkelfBrowser(QMainWindow):
         view.setPage(page)
         page.fullScreenRequested.connect(self.handle_fullscreen)
         
-        
-
         # ---- EasyList Cosmetic Injection ----
         def apply_easylist_cosmetics(v=view):
             try:
@@ -2959,6 +2973,83 @@ class DarkelfBrowser(QMainWindow):
             w.page().deleteLater()
             w.deleteLater()
             
+    def take_snapshot(self):
+        view = self.tabs.currentWidget()
+        if not view:
+            return
+
+        # Grab screenshot of current tab
+        pixmap = view.grab()
+
+        # Desktop path
+        desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+
+        # Darkelf Snap folder
+        snap_dir = os.path.join(desktop, "Darkelf Snap Folder")
+
+        # Create folder if missing
+        os.makedirs(snap_dir, exist_ok=True)
+
+        # Filename
+        filename = f"darkelf_snapshot_{int(time.time())}.png"
+        path = os.path.join(snap_dir, filename)
+
+        # Save image
+        pixmap.save(path, "PNG")
+
+        print(f"[Darkelf] Snapshot saved → {path}")
+        
+    def setup_hotkeys(self):
+
+        # New tab
+        new_tab_action = QAction(self)
+        new_tab_action.setShortcut("Ctrl+T")
+        new_tab_action.triggered.connect(self.new_tab)
+        self.addAction(new_tab_action)
+
+        # Close tab
+        close_tab_action = QAction(self)
+        close_tab_action.setShortcut("Ctrl+W")
+        close_tab_action.triggered.connect(self.close_tab)
+        self.addAction(close_tab_action)
+
+        # Reload
+        reload_action = QAction(self)
+        reload_action.setShortcut("Ctrl+R")
+        reload_action.triggered.connect(self.reload_page)
+        self.addAction(reload_action)
+
+        # Focus URL
+        focus_url_action = QAction(self)
+        focus_url_action.setShortcut("Ctrl+L")
+        focus_url_action.triggered.connect(lambda: self.url_bar.setFocus())
+
+        # Next tab
+        next_tab_action = QAction(self)
+        next_tab_action.setShortcut("Ctrl+Tab")
+        next_tab_action.triggered.connect(
+            lambda: self.tabs.setCurrentIndex(
+                (self.tabs.currentIndex() + 1) % self.tabs.count()
+            )
+        )
+        self.addAction(next_tab_action)
+
+        # Previous tab
+        prev_tab_action = QAction(self)
+        prev_tab_action.setShortcut("Ctrl+Shift+Tab")
+        prev_tab_action.triggered.connect(
+            lambda: self.tabs.setCurrentIndex(
+                (self.tabs.currentIndex() - 1) % self.tabs.count()
+            )
+        )
+        self.addAction(prev_tab_action)
+        
+        # Snapshot
+        snapshot_action = QAction(self)
+        snapshot_action.setShortcuts(["Ctrl+Shift+S", "Meta+Shift+S"])
+        snapshot_action.triggered.connect(self.take_snapshot)
+        self.addAction(snapshot_action)
+        
     def _cleanup_webengine(self):
         # Close tabs from last to first
         for i in reversed(range(self.tabs.count())):
@@ -3114,7 +3205,16 @@ class DarkelfBrowser(QMainWindow):
 
         # add item to shelf
         self.download_shelf.add_download(item)
+        
+    def closeEvent(self, event):
+        try:
+            if hasattr(self, "mini_ai"):
+                self.mini_ai.shutdown()
+        except Exception as e:
+            print("[MiniAI] shutdown error:", e)
 
+        super().closeEvent(event)
+        
     def _wipe_download_traces(self):
         """
         Deletes the per-session temp download directory (best-effort).
@@ -3124,7 +3224,6 @@ class DarkelfBrowser(QMainWindow):
                 shutil.rmtree(self._download_dir, ignore_errors=True)
         except Exception:
             pass
-
         
 if __name__ == "__main__":
 
