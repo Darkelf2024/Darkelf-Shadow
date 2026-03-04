@@ -2469,27 +2469,64 @@ class HardenedWebPage(QWebEnginePage):
     def createWindow(self, _type):
         parent_view = getattr(self, "_parent_view", None)
         main_window = parent_view.window() if parent_view else None
-        has_tabs = bool(main_window and hasattr(main_window, "_add_tab") and hasattr(main_window, "tabs"))
+        has_tabs = bool(main_window and hasattr(main_window, "tabs"))
+
         view_parent = main_window if has_tabs else parent_view
         view = QWebEngineView(view_parent)
+
         try:
             page = HardenedWebPage(view, self.profile())
         except TypeError:
             page = HardenedWebPage(view)
+
         view.setPage(page)
         page._parent_view = view
-        page.fullScreenRequested.connect(
-            view.window().handle_fullscreen
-        )
-        
+
+        try:
+            page.fullScreenRequested.connect(view.window().handle_fullscreen)
+        except Exception:
+            pass
+
         if has_tabs:
+
             idx = main_window.tabs.addTab(view, "New Tab")
             main_window.tabs.setCurrentIndex(idx)
+
+            # DO NOT enable Qt close buttons
+            main_window.tabs.setTabsClosable(False)
+
+            # Add your custom green close button
+            close_btn = QPushButton("×")
+            close_btn.setFixedSize(16, 16)
+            close_btn.setCursor(Qt.PointingHandCursor)
+
+            close_btn.setStyleSheet("""
+                QPushButton {
+                    background: #34C759;
+                    color: #0a0b10;
+                    border: none;
+                    border-radius: 8px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background: #2fb14e;
+                }
+            """)
+
+            close_btn.clicked.connect(
+                lambda _, v=view: main_window.close_tab(main_window.tabs.indexOf(v))
+            )
+
+            main_window.tabs.tabBar().setTabButton(idx, QTabBar.RightSide, close_btn)
+
         else:
             view.show()
+
         if not hasattr(self, "_spawned_views"):
             self._spawned_views = []
+
         self._spawned_views.append(view)
+
         return page
 
 class DownloadItem(QWidget):
