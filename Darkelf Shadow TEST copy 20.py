@@ -7,8 +7,8 @@ import math
 import random
 from PySide6.QtCore import Qt, QUrl, QUrlQuery, QSize, QPointF, QRectF, QTimer
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QLineEdit, QToolBar,
-    QTabWidget, QTabBar, QMessageBox, QToolButton,
+    QApplication, QMainWindow, QLineEdit, QToolBar, QPushButton, QLabel, QWidget,
+    QTabWidget, QTabBar, QMessageBox, QToolButton, QProgressBar,
     QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QProgressDialog
 )
 from PySide6.QtGui import (
@@ -1569,7 +1569,7 @@ body {{
 </body>
 </html>
 """
-        
+
 class HardenedWebPage(QWebEnginePage):
     def __init__(self, parent=None, profile=None, canvas_seed=None):
         view = parent
@@ -1581,7 +1581,7 @@ class HardenedWebPage(QWebEnginePage):
         self._parent_view = view
         prof = self.profile()
         self.interceptor = getattr(prof, "_darkelf_interceptor", None)
-        #self.inject_darkelf_letterboxing(skip_youtube=True)
+        self.inject_darkelf_letterboxing()
         self.inject_all_scripts()
 
 
@@ -1604,6 +1604,105 @@ class HardenedWebPage(QWebEnginePage):
         script_obj.setWorldId(QWebEngineScript.MainWorld)
         scripts.insert(script_obj)
         
+    def inject_darkelf_letterboxing(self):
+        script = """
+        (() => {
+
+            const detectPlatform = () => {
+                try {
+                    const p = navigator.platform.toLowerCase();
+                    if (p.includes('mac')) return 'mac';
+                    if (p.includes('win')) return 'windows';
+                    if (p.includes('linux')) return 'linux';
+                    return 'windows';
+                } catch (e) {
+                    return 'windows';
+                }
+            };
+
+            const personas = [
+                [1920,1080],
+                [1536,864],
+                [1440,900],
+                [1366,768],
+                [1280,720]
+            ];
+
+            const pickPersona = () => {
+                try {
+                    const p = personas[Math.floor(Math.random() * personas.length)];
+                    return { width: p[0], height: p[1] };
+                } catch(e) {
+                    return { width: 1920, height: 1080 };
+                }
+            };
+
+            const frameSizes = {
+                windows: 140,
+                mac: 80,
+                linux: 120
+            };
+
+            const persona = pickPersona();
+
+            const applyPatch = (win) => {
+                try {
+
+                    const platform = detectPlatform();
+                    const frame = frameSizes[platform] || 140;
+
+                    const width = persona.width;
+                    const height = persona.height;
+
+                    const safeDefine = (obj, key, getter) => {
+                        try {
+                            Object.defineProperty(obj, key, {
+                                get: getter,
+                                configurable: false
+                            });
+                        } catch(e) {}
+                    };
+
+                    safeDefine(win.screen, "width", () => width);
+                    safeDefine(win.screen, "height", () => height);
+                    safeDefine(win.screen, "availWidth", () => width);
+                    safeDefine(win.screen, "availHeight", () => height);
+
+                    safeDefine(win, "innerWidth", () => width);
+                    safeDefine(win, "innerHeight", () => height);
+
+                    safeDefine(win, "outerWidth", () => width);
+                    safeDefine(win, "outerHeight", () => height + frame);
+
+                } catch (e) {}
+            };
+
+            applyPatch(window);
+
+            new MutationObserver((muts) => {
+                for (const m of muts) {
+                    m.addedNodes.forEach((node) => {
+                        if (node.tagName === 'IFRAME') {
+                            try {
+                                const w = node.contentWindow;
+                                applyPatch(w);
+                            } catch (e) {}
+                        }
+                    });
+                }
+            }).observe(document, { childList: true, subtree: true });
+
+            console.log('[DarkelfAI] Darkelf Letterboxing persona applied.');
+
+        })();
+        """
+
+        self.inject_script(
+            script,
+            injection_point=QWebEngineScript.DocumentCreation,
+            subframes=True
+        )
+
     # --- Inject WebRTC block, geo override, and canvas noise all at DocumentCreation ---
     def stealth_webrtc_block(self):
         script = """
@@ -2260,7 +2359,90 @@ class HardenedWebPage(QWebEnginePage):
         }})();
         """
         self.inject_script(js, injection_point=QWebEngineScript.DocumentCreation, subframes=True)
-                      
+        
+    def inject_stealth_chrome_environment(self):
+        script = """
+        (() => {
+            const patchPlugins = (nav) => {
+                try {
+                    if (!nav.plugins || nav.plugins.length === 0) {
+                        const fakePlugins = [
+                            { name: "Chrome PDF Plugin" },
+                            { name: "Chrome PDF Viewer" },
+                            { name: "Native Client" }
+                        ];
+
+                        fakePlugins.length = 3;
+                        fakePlugins.item = (i) => fakePlugins[i];
+
+                        Object.defineProperty(nav, 'plugins', {
+                            get: () => fakePlugins,
+                            configurable: false
+                        });
+                    }
+                } catch (e) {}
+            };
+
+            const patchChromeRuntime = (win) => {
+                try {
+                    if (!win.chrome) {
+                        win.chrome = {};
+                    }
+
+                    if (!win.chrome.runtime) {
+                        Object.defineProperty(win.chrome, 'runtime', {
+                            get: () => ({}),
+                            configurable: false
+                        });
+                    }
+                } catch (e) {}
+            };
+
+            const patchPermissions = (nav) => {
+                try {
+                    if (nav.permissions && nav.permissions.query) {
+                        const originalQuery = nav.permissions.query.bind(nav.permissions);
+
+                        nav.permissions.query = function(parameters) {
+                            if (parameters && parameters.name === 'notifications') {
+                                return Promise.resolve({ state: Notification.permission });
+                            }
+                            return originalQuery(parameters);
+                        };
+                    }
+                } catch (e) {}
+            };
+
+            const apply = (win) => {
+                try {
+                    patchPlugins(win.navigator);
+                    patchChromeRuntime(win);
+                    patchPermissions(win.navigator);
+                } catch (e) {}
+            };
+
+            // Apply to main window
+            apply(window);
+
+            // Iframe defense
+            new MutationObserver((muts) => {
+                for (const m of muts) {
+                    m.addedNodes.forEach((node) => {
+                        if (node.tagName === 'IFRAME') {
+                            try {
+                                const w = node.contentWindow;
+                                apply(w);
+                            } catch (e) {}
+                        }
+                    });
+                }
+            }).observe(document, { childList: true, subtree: true });
+
+            console.log('[DarkelfAI] Chrome environment normalized.');
+        })();
+        """
+        self.inject_script(script, injection_point=QWebEngineScript.DocumentCreation, subframes=True)
+        
     def inject_all_scripts(self):
         self.stealth_webrtc_block()
         self.block_webrtc_sdp_logging()
@@ -2275,6 +2457,8 @@ class HardenedWebPage(QWebEnginePage):
         self.inject_resize_observer_suppressor()
         self.inject_stealth_storage_block()
         self.inject_iframe_environment_harmonizer()
+        self.inject_stealth_chrome_environment()
+        
 
     def acceptNavigationRequest(self, url, navtype, isMainFrame):
         if url.scheme() == "file":
@@ -2307,6 +2491,83 @@ class HardenedWebPage(QWebEnginePage):
             self._spawned_views = []
         self._spawned_views.append(view)
         return page
+
+class DownloadItem(QWidget):
+
+    def __init__(self, download):
+        super().__init__()
+
+        self.download = download
+
+        layout = QHBoxLayout(self)
+
+        self.label = QLabel(download.downloadFileName())
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.cancel = QPushButton("Cancel")
+
+        layout.addWidget(self.label)
+        layout.addWidget(self.progress)
+        layout.addWidget(self.cancel)
+
+        self.cancel.clicked.connect(self._handle_click)
+
+        download.receivedBytesChanged.connect(self.update_progress)
+        download.totalBytesChanged.connect(self.update_progress)
+        download.stateChanged.connect(self.handle_state)
+
+    def update_progress(self):
+        total = self.download.totalBytes()
+        received = self.download.receivedBytes()
+
+        if total <= 0:
+            # Unknown file size → show animated busy bar
+            self.progress.setRange(0, 0)
+        else:
+            percent = int((received / total) * 100)
+            self.progress.setRange(0, 100)
+            self.progress.setValue(percent)
+
+    def handle_state(self, state):
+
+        if state == QWebEngineDownloadRequest.DownloadCompleted:
+            self.progress.setValue(100)
+            self.cancel.setText("Done")
+
+        elif state == QWebEngineDownloadRequest.DownloadCancelled:
+            self.cancel.setText("Remove")
+
+        elif state == QWebEngineDownloadRequest.DownloadInterrupted:
+            self.cancel.setText("Failed")
+            
+    def _handle_click(self):
+
+        state = self.download.state()
+
+        if state == QWebEngineDownloadRequest.DownloadInProgress:
+            self.download.cancel()
+        else:
+            self.setParent(None)
+            self.deleteLater()
+
+class DownloadShelf(QWidget):
+
+    def __init__(self):
+        super().__init__()
+
+        self.layout = QVBoxLayout(self)
+
+    def add_download(self, download):
+
+        item = DownloadItem(download)
+        self.layout.addWidget(item)
+
+        item.destroyed.connect(self._check_empty)
+
+    def _check_empty(self):
+
+        if self.layout.count() == 0:
+            self.hide()
 
 class DarkelfBrowser(QMainWindow):
     def __init__(self, profile):
@@ -2349,6 +2610,18 @@ class DarkelfBrowser(QMainWindow):
         self._downloaded_files: list[str] = []
         self._hook_secure_downloads()
         
+        self.download_shelf = DownloadShelf()
+        self.download_shelf.hide()
+
+        self.tabs_layout = QVBoxLayout()
+        self.tabs_layout.addWidget(self.tabs)
+        self.tabs_layout.addWidget(self.download_shelf)
+
+        container = QWidget()
+        container.setLayout(self.tabs_layout)
+
+        self.setCentralWidget(container)
+
         QApplication.instance().aboutToQuit.connect(self._wipe_download_traces)
         
     def on_url_entered(self):
@@ -2780,60 +3053,30 @@ class DarkelfBrowser(QMainWindow):
             print(f"[Darkelf] Tor cookie authentication failed: {e}")
             
     def _hook_secure_downloads(self):
-        try:
-            self.shared_profile.downloadRequested.disconnect(self._handle_download_requested)
-        except:
-            pass
 
-        self.shared_profile.downloadRequested.connect(self._handle_download_requested)
+        signal = self.shared_profile.downloadRequested
 
+        if getattr(self, "_download_signal_connected", False):
+            return
+
+        signal.connect(self._handle_download_requested)
+        self._download_signal_connected = True
 
     def _handle_download_requested(self, item):
 
-        # Generate randomized filename
         filename = _randomized_filename(item.downloadFileName())
+        filename = os.path.basename(filename)
 
-        # Force Darkelf Temp Folder
-        folder = self._download_dir
-
-        item.setDownloadDirectory(folder)
+        item.setDownloadDirectory(self._download_dir)
         item.setDownloadFileName(filename)
 
-        # Start download
         item.accept()
 
-        progress = QProgressDialog(
-            f"Downloading {filename}...",
-            "Cancel",
-            0,
-            100,
-            self
-        )
+        # show shelf
+        self.download_shelf.show()
 
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.setValue(0)
-
-        def update_progress():
-            total = item.totalBytes()
-            received = item.receivedBytes()
-            if total > 0:
-                percent = int((received / total) * 100)
-                progress.setValue(percent)
-
-        item.receivedBytesChanged.connect(update_progress)
-        item.totalBytesChanged.connect(update_progress)
-
-    def check_state(state):
-        if state == QWebEngineDownloadRequest.DownloadCompleted:
-            progress.setValue(100)
-            QTimer.singleShot(400, progress.close)  # keep visible 0.4 sec
-        elif state == QWebEngineDownloadRequest.DownloadCancelled:
-            progress.close()
-
-        item.stateChanged.connect(check_state)
-
-        progress.canceled.connect(item.cancel)
+        # add item to shelf
+        self.download_shelf.add_download(item)
 
     def _wipe_download_traces(self):
         """
