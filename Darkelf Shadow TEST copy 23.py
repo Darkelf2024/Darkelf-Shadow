@@ -5,6 +5,7 @@ import sys, os, uuid
 import tempfile
 import math
 import random
+import gc
 from PySide6.QtCore import Qt, QUrl, QUrlQuery, QSize, QPointF, QRectF, QTimer
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLineEdit, QToolBar, QPushButton, QLabel, QWidget,
@@ -42,8 +43,8 @@ except:
 import urllib.request
 from urllib.error import URLError, HTTPError
     
-#devnull = open(os.devnull, 'w')
-#os.dup2(devnull.fileno(), sys.stderr.fileno())
+devnull = open(os.devnull, 'w')
+os.dup2(devnull.fileno(), sys.stderr.fileno())
 
 # ===================== Secure No-Trace Downloads helpers =====================
 
@@ -2310,7 +2311,6 @@ class HardenedWebPage(QWebEnginePage):
         spoof = {
             "platform": detect_nav_platform(),
             "vendor": "Google Inc.",
-            # keep UA as whatever QtWebEngine currently uses:
             "userAgent": None,
             "deviceMemory": None,
             "hardwareConcurrency": None,
@@ -2326,58 +2326,77 @@ class HardenedWebPage(QWebEnginePage):
 
           const SPOOF = {json.dumps(spoof)};
 
-          // Fill dynamic fields at runtime
+          // runtime values
           SPOOF.userAgent = navigator.userAgent;
-          SPOOF.hardwareConcurrency = (Math.floor(Math.random() * 11) + 2);
+
+          // generate ONE stable value per page
+          if (!window.__darkelf_hc_value) {{
+            window.__darkelf_hc_value = Math.floor(Math.random() * 6) + 4;
+          }}
+
+          SPOOF.hardwareConcurrency = window.__darkelf_hc_value;
 
           function def(obj, prop, getter) {{
             try {{
-              Object.defineProperty(obj, prop, {{ get: getter, configurable: true }});
-            }} catch (e) {{}}
+              Object.defineProperty(obj, prop, {{
+                get: getter,
+                configurable: true
+              }});
+            }} catch(e) {{}}
           }}
 
           function applyToWindow(w) {{
             if (!w || w.__darkelf_spoofed) return;
+
             try {{ w.__darkelf_spoofed = true; }} catch(e) {{}}
 
             try {{
-              const n = w.navigator;
-              if (n) {{
-                def(n, "platform", () => SPOOF.platform);
-                def(n, "vendor", () => SPOOF.vendor);
-                def(n, "userAgent", () => SPOOF.userAgent);
-                def(n, "deviceMemory", () => SPOOF.deviceMemory);
-                def(n, "hardwareConcurrency", () => SPOOF.hardwareConcurrency);
-                def(n, "languages", () => SPOOF.languages.slice());
-                def(n, "language", () => SPOOF.language);
-                def(n, "maxTouchPoints", () => SPOOF.maxTouchPoints);
-              }}
+              const nav = w.navigator;
+              if (!nav) return;
+
+              const proto = Object.getPrototypeOf(nav);
+
+              def(proto, "platform", () => SPOOF.platform);
+              def(proto, "vendor", () => SPOOF.vendor);
+              def(proto, "userAgent", () => SPOOF.userAgent);
+              def(proto, "deviceMemory", () => SPOOF.deviceMemory);
+              def(proto, "hardwareConcurrency", () => SPOOF.hardwareConcurrency);
+              def(proto, "languages", () => SPOOF.languages.slice());
+              def(proto, "language", () => SPOOF.language);
+              def(proto, "maxTouchPoints", () => SPOOF.maxTouchPoints);
+
             }} catch(e) {{}}
           }}
 
           applyToWindow(window);
+
         }})();
         """
         self.inject_script(js, injection_point=QWebEngineScript.DocumentCreation, subframes=True)
+
         
     def inject_stealth_chrome_environment(self):
         script = """
         (() => {
+
             const patchPlugins = (nav) => {
                 try {
                     if (!nav.plugins || nav.plugins.length === 0) {
+
                         const fakePlugins = [
-                            { name: "Chrome PDF Plugin" },
-                            { name: "Chrome PDF Viewer" },
-                            { name: "Native Client" }
+                            { name: "Chrome PDF Plugin", filename: "internal-pdf-viewer" },
+                            { name: "Chrome PDF Viewer", filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai" },
+                            { name: "Native Client", filename: "internal-nacl-plugin" }
                         ];
 
                         fakePlugins.length = 3;
                         fakePlugins.item = (i) => fakePlugins[i];
+                        fakePlugins.namedItem = (name) =>
+                            fakePlugins.find(p => p.name === name);
 
                         Object.defineProperty(nav, 'plugins', {
                             get: () => fakePlugins,
-                            configurable: false
+                            configurable: true
                         });
                     }
                 } catch (e) {}
@@ -2385,63 +2404,90 @@ class HardenedWebPage(QWebEnginePage):
 
             const patchChromeRuntime = (win) => {
                 try {
-                    if (!win.chrome) {
+
+                    if (!win.chrome)
                         win.chrome = {};
-                    }
 
                     if (!win.chrome.runtime) {
                         Object.defineProperty(win.chrome, 'runtime', {
                             get: () => ({}),
-                            configurable: false
+                            configurable: true
                         });
                     }
+
                 } catch (e) {}
             };
 
             const patchPermissions = (nav) => {
                 try {
+
                     if (nav.permissions && nav.permissions.query) {
+    
                         const originalQuery = nav.permissions.query.bind(nav.permissions);
 
                         nav.permissions.query = function(parameters) {
+
                             if (parameters && parameters.name === 'notifications') {
-                                return Promise.resolve({ state: Notification.permission });
+                                return Promise.resolve({
+                                    state: Notification.permission
+                                });
                             }
+
                             return originalQuery(parameters);
                         };
                     }
+
                 } catch (e) {}
             };
 
             const apply = (win) => {
                 try {
+                    if (!win || win.__darkelf_chrome_env)
+                        return;
+
+                    win.__darkelf_chrome_env = true;
+
                     patchPlugins(win.navigator);
                     patchChromeRuntime(win);
                     patchPermissions(win.navigator);
+
                 } catch (e) {}
             };
 
-            // Apply to main window
+            // apply to main window
             apply(window);
 
-            // Iframe defense
+            // observe iframes
             new MutationObserver((muts) => {
+
                 for (const m of muts) {
+
                     m.addedNodes.forEach((node) => {
-                        if (node.tagName === 'IFRAME') {
+
+                        if (!node.tagName)
+                            return;
+
+                        if (node.tagName.toLowerCase() === "iframe") {
+
                             try {
                                 const w = node.contentWindow;
                                 apply(w);
                             } catch (e) {}
+
                         }
+
                     });
+
                 }
+
             }).observe(document, { childList: true, subtree: true });
 
-            console.log('[DarkelfAI] Chrome environment normalized.');
+            console.log('[DarkelfAI] Chrome environment normalized');
+
         })();
         """
         self.inject_script(script, injection_point=QWebEngineScript.DocumentCreation, subframes=True)
+
         
     def inject_all_scripts(self):
         self.stealth_webrtc_block()
@@ -2662,15 +2708,45 @@ class DarkelfBrowser(QMainWindow):
         QApplication.instance().aboutToQuit.connect(self._wipe_download_traces)
         
         self.setup_hotkeys()
+        
+                # Clean-Up
+        self.cleanup_timer = QTimer(self)
+        self.cleanup_timer.setSingleShot(True)
+        self.cleanup_timer.timeout.connect(self.memory_cleanup)
+        
+        self.maintenance_timer = QTimer(self)
+        self.maintenance_timer.timeout.connect(self.memory_cleanup)
+        self.maintenance_timer.start(300000)
+        
+        self.renderer_cleanup_timer = QTimer(self)
+        self.renderer_cleanup_timer.timeout.connect(self.release_renderer_memory)
+        self.renderer_cleanup_timer.start(600000)  # every 10 minutes
+        
+    def release_renderer_memory(self):
+        try:
+            for i in range(self.tabs.count()):
+                view = self.tabs.widget(i)
+                page = view.page()
+
+                if i != self.tabs.currentIndex():  # skip active tab
+                    page.triggerAction(page.Stop)
+                    page.setLifecycleState(page.LifecycleState.Discarded)
+
+            print("[Darkelf] Renderer memory released")
+
+        except Exception as e:
+            print("[Darkelf] Renderer cleanup error:", e)
 
     def new_tab(self):
         self._add_tab(home=True)
+        self.debounce_cleanup()
 
         
     def close_tab(self):
         i = self.tabs.currentIndex()
         if i >= 0:
             self.tabs.removeTab(i)
+            self.debounce_cleanup()
             
     def reload_page(self):
         view = self.tabs.currentWidget()
@@ -2698,6 +2774,18 @@ class DarkelfBrowser(QMainWindow):
 
         self._add_tab(url=url)
         
+    def debounce_cleanup(self, delay=5000):
+        # Restart timer every time
+        self.cleanup_timer.start(delay)
+        
+    def memory_cleanup(self):
+        try:
+            gc.collect()
+            print("[Darkelf] GC complete")
+
+        except Exception as e:
+            print("[Darkelf] Cleanup error:", e)
+            
     def make_outline_lock_icon(self, color="#ffffff", size=16):
         pix = QPixmap(size, size)
         pix.fill(Qt.transparent)
@@ -2996,6 +3084,8 @@ class DarkelfBrowser(QMainWindow):
 
         # Save image
         pixmap.save(path, "PNG")
+        
+        self.debounce_cleanup
 
         print(f"[Darkelf] Snapshot saved → {path}")
         
