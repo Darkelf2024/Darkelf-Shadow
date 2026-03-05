@@ -758,15 +758,25 @@ class EasyListEngine:
         return "\n".join(lines)
         
 class StealthInterceptor(QWebEngineUrlRequestInterceptor):
-    def __init__(self, engine: EasyListEngine):
+    def __init__(self, engine: EasyListEngine, mini_ai):
         super().__init__()
         self.engine = engine
+        self.mini_ai = mini_ai
         self.hsts_hosts = set()  # remember HTTPS-capable hosts
 
     def interceptRequest(self, info):
         qurl = info.requestUrl()
         scheme = (qurl.scheme() or "").lower()
         host = (qurl.host() or "").lower()
+        
+        req_url = qurl.toString()
+
+        # send request to MiniAI
+        if self.mini_ai:
+            try:
+                self.mini_ai.monitor_network(req_url)
+            except Exception as e:
+                print("MiniAI error:", e)
 
         # --------------------------------------------------
         # 0️⃣ Skip safe/internal schemes
@@ -797,6 +807,10 @@ class StealthInterceptor(QWebEngineUrlRequestInterceptor):
             https_url = QUrl(qurl)
             https_url.setScheme("https")
             self.hsts_hosts.add(host)
+
+            if self.mini_ai:
+                self.mini_ai.on_http_blocked(req_url)
+
             info.redirect(https_url)
             return
 
@@ -879,6 +893,8 @@ class StealthInterceptor(QWebEngineUrlRequestInterceptor):
         try:
             if self.engine and self.engine.should_block(req_url, fp_url, req_type):
                 print("BLOCKED:", req_type, fp_url, "->", req_url)
+                if self.mini_ai:
+                    self.mini_ai.monitor_network(req_url)
                 info.block(True)
                 return
         except Exception as e:
@@ -1583,6 +1599,7 @@ class HardenedWebPage(QWebEnginePage):
         prof = self.profile()
         self.interceptor = getattr(prof, "_darkelf_interceptor", None)
         self.inject_darkelf_letterboxing()
+        self.hw_concurrency_spoof = random.choice([2, 4, 6, 8])
         self.inject_all_scripts()
 
 
@@ -2306,6 +2323,93 @@ class HardenedWebPage(QWebEnginePage):
             script,
             injection_point=QWebEngineScript.DocumentCreation,
             subframes=True)
+            
+    def inject_hw_concurrency_spoof(self):
+        script = """
+        (() => {
+
+            const values = [2,4,6,8];
+
+            const hashHost = (host) => {
+                let h = 0;
+                for (let i = 0; i < host.length; i++) {
+                    h = ((h << 5) - h) + host.charCodeAt(i);
+                    h |= 0;
+                }
+                return Math.abs(h);
+            };
+
+            const getValue = () => {
+                try {
+                    const host = location.hostname || "default";
+                    const idx = hashHost(host) % values.length;
+                    return values[idx];
+                } catch(e) {
+                    return values[Math.floor(Math.random()*values.length)];
+                }
+            };
+
+            const patch = (nav) => {
+                try {
+
+                    Object.defineProperty(nav, "hardwareConcurrency", {
+                        get() { return getValue(); },
+                        configurable: false,
+                        enumerable: true
+                    });
+
+                    Object.defineProperty(Navigator.prototype, "hardwareConcurrency", {
+                        get() { return getValue(); },
+                        configurable: false,
+                        enumerable: true
+                    });
+
+                } catch(e) {}
+            };
+
+            const apply = (win) => {
+                try {
+
+                    if (!win || win.__darkelf_hw_patch)
+                        return;
+
+                    win.__darkelf_hw_patch = true;
+
+                    patch(win.navigator);
+
+                } catch(e) {}
+            };
+
+            apply(window);
+
+            new MutationObserver((muts) => {
+
+                for (const m of muts) {
+
+                    m.addedNodes.forEach((node) => {
+
+                        if (!node.tagName)
+                            return;
+
+                        if (node.tagName.toLowerCase() === "iframe") {
+
+                            try {
+                                apply(node.contentWindow);
+                            } catch(e) {}
+
+                        }
+
+                    });
+
+                }
+
+            }).observe(document,{childList:true,subtree:true});
+
+            console.log("[DarkelfAI] hardwareConcurrency domain-randomized");
+
+        })();
+        """
+        self.inject_script(script, injection_point=QWebEngineScript.DocumentCreation, subframes=True)
 
     def inject_iframe_environment_harmonizer(self):
         spoof = {
@@ -2313,28 +2417,21 @@ class HardenedWebPage(QWebEnginePage):
             "vendor": "Google Inc.",
             "userAgent": None,
             "deviceMemory": None,
-            "hardwareConcurrency": None,
             "languages": ["en-US", "en"],
             "language": "en-US",
             "maxTouchPoints": 0,
         }
+        
+        spoof_json = json.dumps(spoof)
 
-        js = f"""
+        js = """
         (() => {{
           if (window.__darkelf_iframe_harmonizer) return;
           window.__darkelf_iframe_harmonizer = true;
 
-          const SPOOF = {json.dumps(spoof)};
+          const SPOOF = {JSON.parse('%');
 
-          // runtime values
           SPOOF.userAgent = navigator.userAgent;
-
-          // generate ONE stable value per page
-          if (!window.__darkelf_hc_value) {{
-            window.__darkelf_hc_value = Math.floor(Math.random() * 6) + 4;
-          }}
-
-          SPOOF.hardwareConcurrency = window.__darkelf_hc_value;
 
           function def(obj, prop, getter) {{
             try {{
@@ -2356,14 +2453,13 @@ class HardenedWebPage(QWebEnginePage):
 
               const proto = Object.getPrototypeOf(nav);
 
-              def(proto, "platform", () => SPOOF.platform);
-              def(proto, "vendor", () => SPOOF.vendor);
-              def(proto, "userAgent", () => SPOOF.userAgent);
-              def(proto, "deviceMemory", () => SPOOF.deviceMemory);
-              def(proto, "hardwareConcurrency", () => SPOOF.hardwareConcurrency);
-              def(proto, "languages", () => SPOOF.languages.slice());
-              def(proto, "language", () => SPOOF.language);
-              def(proto, "maxTouchPoints", () => SPOOF.maxTouchPoints);
+              def(proto,"platform",() => SPOOF.platform);
+              def(proto,"vendor",() => SPOOF.vendor);
+              def(proto,"userAgent",() => SPOOF.userAgent);
+              def(proto,"deviceMemory",() => SPOOF.deviceMemory);
+              def(proto,"languages",() => SPOOF.languages.slice());
+              def(proto,"language",() => SPOOF.language);
+              def(proto,"maxTouchPoints",() => SPOOF.maxTouchPoints);
 
             }} catch(e) {{}}
           }}
@@ -2373,7 +2469,6 @@ class HardenedWebPage(QWebEnginePage):
         }})();
         """
         self.inject_script(js, injection_point=QWebEngineScript.DocumentCreation, subframes=True)
-
         
     def inject_stealth_chrome_environment(self):
         script = """
@@ -2502,6 +2597,7 @@ class HardenedWebPage(QWebEnginePage):
         self.inject_font_protection()
         self.inject_resize_observer_suppressor()
         self.inject_stealth_storage_block()
+        self.inject_hw_concurrency_spoof()
         self.inject_iframe_environment_harmonizer()
         self.inject_stealth_chrome_environment()
         
@@ -2655,7 +2751,7 @@ class DownloadShelf(QWidget):
 class DarkelfBrowser(QMainWindow):
     def __init__(self, profile):
         super().__init__()
-
+        
         self.setWindowTitle("")
         self.resize(1200, 800)
 
@@ -2670,8 +2766,13 @@ class DarkelfBrowser(QMainWindow):
 
         print("Loaded network rules:", len(self.easy.network_rules))
 
-        # Keep a strong reference so it doesn't get garbage-collected
-        self.interceptor = StealthInterceptor(self.easy)
+        # Darkelf MiniAI
+        self.mini_ai = DarkelfMiniAISentinel()
+
+        self.interceptor = StealthInterceptor(
+            self.easy,
+            self.mini_ai
+        )
         self.shared_profile._darkelf_interceptor = self.interceptor  # extra safety
         self.shared_profile.setUrlRequestInterceptor(self.interceptor)
         
@@ -2685,7 +2786,6 @@ class DarkelfBrowser(QMainWindow):
         self.toolbar = self._make_toolbar()
         self.addToolBar(Qt.TopToolBarArea, self.toolbar)
 
-        self.mini_ai = DarkelfMiniAISentinel()
         QApplication.instance().aboutToQuit.connect(self._cleanup_webengine)
         self._add_tab(home=True)
         
@@ -2726,13 +2826,18 @@ class DarkelfBrowser(QMainWindow):
         try:
             for i in range(self.tabs.count()):
                 view = self.tabs.widget(i)
+
+                if not view:
+                    continue
+
                 page = view.page()
 
-                if i != self.tabs.currentIndex():  # skip active tab
-                    page.triggerAction(page.Stop)
-                    page.setLifecycleState(page.LifecycleState.Discarded)
+                if not page:
+                    continue
 
-            print("[Darkelf] Renderer memory released")
+                if i != self.tabs.currentIndex():  # skip active tab
+                    page.triggerAction(QWebEnginePage.Stop)
+                    page.setLifecycleState(QWebEnginePage.LifecycleState.Discarded)
 
         except Exception as e:
             print("[Darkelf] Renderer cleanup error:", e)
