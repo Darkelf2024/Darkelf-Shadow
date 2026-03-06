@@ -3560,7 +3560,7 @@ class DarkelfBrowser(QMainWindow):
         reply = QMessageBox.question(
             self,
             "Confirm Nuke",
-            "This will erase ALL cookies, cache, and browsing history. Are you sure?",
+            "This will erase ALL cookies, cache, history and close the browser.\n\nContinue?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
         )
@@ -3568,30 +3568,38 @@ class DarkelfBrowser(QMainWindow):
         if reply != QMessageBox.Yes:
             return
 
-        # Clear data from profiles
-        for i in range(self.tabs.count()):
-            view = self.tabs.widget(i)
-            if isinstance(view, QWebEngineView):
-                prof = view.page().profile()
-                try:
-                    prof.clearHttpCache()
-                    prof.clearAllVisitedLinks()
-                    prof.cookieStore().deleteAllCookies()
-                except Exception:
-                    pass
+        try:
+            # Stop all pages first (prevents WebEngine memory explosion)
+            for i in range(self.tabs.count()):
+                view = self.tabs.widget(i)
+                if isinstance(view, QWebEngineView):
+                    try:
+                        view.page().triggerAction(QWebEnginePage.Stop)
+                    except:
+                        pass
 
-        # Close ALL tabs safely
-        while self.tabs.count() > 0:
-            self.close_tab(0)
+            # Use the default profile once instead of per-tab
+            profile = QWebEngineProfile.defaultProfile()
 
-        # Create ONE fresh tab
-        self._add_tab(home=True)
+            profile.cookieStore().deleteAllCookies()
+            profile.clearHttpCache()
+            profile.clearAllVisitedLinks()
+
+        except Exception as e:
+            print("NUKE ERROR:", e)
+
+        # Close all tabs safely
+        self.tabs.clear()
 
         QMessageBox.information(
             self,
             "Nuke Complete",
-            "All browser data has been wiped!"
+            "All browser data wiped.\nBrowser will now close."
         )
+
+        # Fully shutdown browser
+        gc.collect()
+        QApplication.quit()
 
     def authenticate_cookie(self, controller, cookie_path):
         try:
