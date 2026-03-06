@@ -43,8 +43,8 @@ except:
 import urllib.request
 from urllib.error import URLError, HTTPError
     
-devnull = open(os.devnull, 'w')
-os.dup2(devnull.fileno(), sys.stderr.fileno())
+#devnull = open(os.devnull, 'w')
+#os.dup2(devnull.fileno(), sys.stderr.fileno())
 
 # ===================== Secure No-Trace Downloads helpers =====================
 
@@ -921,7 +921,8 @@ def js_inject_style_tag(style_id: str, css: str) -> str:
       }} catch(e) {{}}
     }})();
     """
-
+    
+# Darkelf MINIAI
 class DarkelfMiniAISentinel:
     """
     Aggressive + Expanded Edition for Darkelf Shadow (PyQt5) - Enhanced for modern trackers,
@@ -948,9 +949,16 @@ class DarkelfMiniAISentinel:
         self.lockdown_threshold = 1  # 1 critical event triggers lockdown
         self.lockdown_triggered_at = None
 
+        # --- Enhancements to reduce false positives ---
+        # Only treat these as "tools" when they appear as separate tokens in path/query/fragment
+        # (not as part of random words/domains).
         self.hacker_tools = [
-            'nmap', 'sqlmap', 'metasploit', 'burpsuite', 'nikto', 'dirbuster', 'hydra', 'wireshark', 'tcpdump', 'ettercap', 'aircrack', 'hashcat', 'johntheripper', 'cobalt', 'mimikatz'
+            'nmap', 'sqlmap', 'metasploit', 'burpsuite', 'nikto', 'dirbuster', 'hydra',
+            'wireshark', 'tcpdump', 'ettercap', 'aircrack', 'hashcat', 'johntheripper',
+            'cobalt', 'mimikatz'
         ]
+
+        # Intrusion patterns: keep your list, but we will apply smarter matching below.
         self.intrusion_patterns = {
             'sql_injection': ['union select', 'or 1=1', "'; drop", 'exec(', 'script>'],
             'xss': ['<script', 'javascript:', 'onerror=', 'onload=', 'eval('],
@@ -961,120 +969,244 @@ class DarkelfMiniAISentinel:
             'phishing': ['verify-account', 'suspended-account', 'confirm-identity', 'urgent-action'],
             'exfil': ['base64,', 'data:text', 'blob:', 'download.php?file='],
         }
+
         # Add AdGuard/clearurls-specific domains
+        # Fix: "clearurls" is not a domain; keep it for URL keyword detection but not domain matching.
+        # Fix: TLD markers (".tk" etc.) should match exact TLD, not substring anywhere in domain.
         self.high_risk_domains = [
             'doubleclick.net', 'googlesyndication.com', 'googleadservices.com', 'adguard.com',
-            'clearurls', 'facebook.net', 'scorecardresearch.com', 'quantserve.com', 'taboola.com',
-            'outbrain.com', 'criteo.com', 'adnxs.com', '.tk', '.ml', '.ga', '.cf', '.gq'
+            'facebook.net', 'scorecardresearch.com', 'quantserve.com', 'taboola.com',
+            'outbrain.com', 'criteo.com', 'adnxs.com',
         ]
+        self.high_risk_tlds = {'.tk', '.ml', '.ga', '.cf', '.gq'}
+
         self.fingerprint_apis = {
-            'canvas': 0, 'webgl': 0, 'audio': 0, 'font': 0, 'battery': 0, 'geolocation': 0, 'media_devices': 0, 'webrtc': 0,
+            'canvas': 0, 'webgl': 0, 'audio': 0, 'font': 0, 'battery': 0,
+            'geolocation': 0, 'media_devices': 0, 'webrtc': 0,
         }
         self.request_timestamps = deque(maxlen=100)
         self.anomaly_threshold = 50  # Aggressive!
 
         print("[MiniAI] Aggressive & Expanded Sentinel ready (threshold=1)")
 
+    # --- Helper methods (new) ---
+    def _safe_parse_url(self, url_norm: str):
+        """
+        Parse URL once and return (parsed, domain, path, query, fragment).
+        This reduces false positives by applying stricter checks to path/query rather than entire URL string.
+        """
+        try:
+            p = urlparse(url_norm)
+            domain = (p.netloc or "").lower()
+            path = (p.path or "").lower()
+            query = (p.query or "").lower()
+            fragment = (p.fragment or "").lower()
+            return p, domain, path, query, fragment
+        except Exception:
+            return None, "", "", "", ""
+
+    def _domain_matches(self, domain: str, candidate: str) -> bool:
+        """
+        True if domain is exactly candidate or a subdomain of it.
+        Avoids substring false positives like 'notdoubleclick.net.example.com' containing 'doubleclick.net'.
+        """
+        if not domain or not candidate:
+            return False
+        domain = domain.strip(".")
+        candidate = candidate.strip(".")
+        return domain == candidate or domain.endswith("." + candidate)
+
+    def _has_high_risk_tld(self, domain: str) -> bool:
+        """
+        Match exact TLD (.tk, .ml, ...) rather than substring anywhere.
+        """
+        if not domain:
+            return False
+        # domain might include port (example.com:8080)
+        host = domain.split(":")[0]
+        host = host.strip(".")
+        dot = host.rfind(".")
+        if dot == -1:
+            return False
+        tld = host[dot:]
+        return tld in self.high_risk_tlds
+
+    def _token_present(self, haystack: str, token: str) -> bool:
+        """
+        Word-boundary-ish token detection for URLs:
+        consider separators commonly seen in URLs rather than only \b (which doesn't handle '-' well).
+        """
+        if not haystack or not token:
+            return False
+        # Treat these as separators: / ? & = # : . - _ +
+        pattern = r"(?:^|[\/\?\&\=\#\:\.\-\_\+])" + re.escape(token) + r"(?:$|[\/\?\&\=\#\:\.\-\_\+])"
+        return re.search(pattern, haystack) is not None
+
     def monitor_network(self, url, headers=None):
         """
         Aggressively monitor all network requests, fingerprinting and tracker events.
         Blocks all future requests instantly on critical.
         """
-        if not self.enabled or not url: return
-        if self.lockdown_active:
-            print("[MiniAI] LOCKDOWN: Absolute block:", url[:80])
+        if not self.enabled or not url:
             return
+        if self.lockdown_active:
+            print("[MiniAI] LOCKDOWN: Absolute block:", str(url)[:80])
+            return
+
         now = time.time()
-        url_norm = unquote(unquote(url))[:self.MAX_URL_LENGTH].lower()
-        domain = ""
-        try:
-            domain = urlparse(url_norm).netloc
+
+        # Normalize carefully: decode twice like you do, but keep within MAX_URL_LENGTH.
+        url_norm = unquote(unquote(str(url)))[:self.MAX_URL_LENGTH]
+        url_norm_l = url_norm.lower()
+
+        parsed, domain, path, query, fragment = self._safe_parse_url(url_norm_l)
+
+        if domain:
             self.unique_domains.add(domain)
-        except Exception: pass
 
         event = {
-            'url': url_norm,
+            'url': url_norm_l,
             'timestamp': now,
             'datetime': time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)),
             'threats': [],
             'risk_level': 'low'
         }
+
         critical = False
-        # Intrusion patterns and hacking tools
+
+        # -------------------------
+        # 1) Intrusion pattern detection (reduced false positives)
+        # -------------------------
+        # Apply most string patterns to query+path+fragment, not full URL (domain can contain misleading substrings).
+        focus = f"{path}?{query}#{fragment}"
+
         for key, patterns in self.intrusion_patterns.items():
             for pat in patterns:
-                if pat in url_norm:
+                # Keep your behavior but only match on focus string to reduce domain-based false positives
+                if pat in focus:
                     self.intrusion_attempts += 1
                     event['threats'].append(f"INTRUSION:{key.upper()}:{pat}")
-                    event['risk_level'] = 'critical'
-                    critical = True
+                    # Only some categories should immediately be critical.
+                    if key in ("sql_injection", "path_traversal", "command_injection", "exfil"):
+                        event['risk_level'] = 'critical'
+                        critical = True
+                    elif key in ("xss", "phishing", "malware", "exploit"):
+                        # still serious, but don't always auto-lockdown unless other indicators confirm
+                        if event['risk_level'] == 'low':
+                            event['risk_level'] = 'high'
+
+        # Hacker tools: only treat as critical when present as tokens in path/query/fragment
+        tool_focus = f"{path}&{query}#{fragment}"
         for tool in self.hacker_tools:
-            if tool in url_norm:
+            if self._token_present(tool_focus, tool):
                 self.intrusion_attempts += 1
-                event['threats'].append("TOOL:"+tool.upper())
+                event['threats'].append("TOOL:" + tool.upper())
                 event['risk_level'] = 'critical'
                 critical = True
-        # Regex detection
+
+        # Regex detection (tightened)
+        # - Use word boundaries and safer patterns.
+        # - Apply to focus only.
         regexes = [
-            (r"(union\s+select|or\s+1=1|drop\s+table|insert\s+into)", 'critical'),
-            (r"(<script.*?>|javascript:|onerror=|onload=)", 'high'),
-            (r"(\.\./|\.\.\\)", 'critical'),
-            (r"(;|\|\||&&)\s*(whoami|ls|cat|bash|cmd)", 'critical'),
+            (r"(?:\bunion\b\s+\bselect\b|\bor\b\s+1\s*=\s*1\b|\bdrop\b\s+\btable\b|\binsert\b\s+\binto\b)", 'critical'),
+            (r"(?:<script\b|javascript:|\bonerror\s*=|\bonload\s*=)", 'high'),
+            (r"(?:\.\./|\.\.\\|%2e%2e)", 'critical'),
+            (r"(?:;|\|\||&&)\s*(?:whoami|ls|cat|bash|cmd(?:\.exe)?)\b", 'critical'),
         ]
         for reg, risk in regexes:
-            if re.search(reg, url_norm):
-                event['threats'].append(f"INTRUSION-REGEX:{risk}")
-                event['risk_level'] = risk
-                critical = critical or (risk == 'critical')
-        # Domain-level risk
-        for bad in self.high_risk_domains:
-            if bad in domain:
-                event['threats'].append(f"HIGH_RISK_DOMAIN:{bad}")
-                event['risk_level'] = 'medium'
+            try:
+                if re.search(reg, focus, flags=re.IGNORECASE):
+                    event['threats'].append(f"INTRUSION-REGEX:{risk}")
+                    # Preserve your intent: critical triggers lockdown
+                    if risk == 'critical':
+                        event['risk_level'] = 'critical'
+                        critical = True
+                    elif event['risk_level'] == 'low':
+                        event['risk_level'] = risk
+            except re.error:
+                # fail safe: if regex is invalid for some reason, skip it
+                pass
 
-        # Passive tracker/fingerprint/malware detection
-        if any(x in url_norm for x in ("malware", "virus", "trojan", "ransomware", "backdoor")):
+        # -------------------------
+        # 2) Domain-level risk (fixed matching)
+        # -------------------------
+        if domain:
+            for bad in self.high_risk_domains:
+                if self._domain_matches(domain, bad):
+                    event['threats'].append(f"HIGH_RISK_DOMAIN:{bad}")
+                    if event['risk_level'] == 'low':
+                        event['risk_level'] = 'medium'
+
+            if self._has_high_risk_tld(domain):
+                event['threats'].append("HIGH_RISK_TLD")
+                if event['risk_level'] == 'low':
+                    event['risk_level'] = 'medium'
+
+        # -------------------------
+        # 3) Passive tracker/fingerprint/malware/exploit detection (reduced false positives)
+        # -------------------------
+        # Malware: require stronger context than just substring "trojan" etc anywhere.
+        malware_terms = ("malware", "virus", "trojan", "ransomware", "backdoor", "cryptolocker", "wannacry")
+        if any(self._token_present(focus, t) for t in malware_terms) or ("c2" in query and ("panel" in path or "gate" in path)):
             self.malware_hits += 1
             event['threats'].append("MALWARE")
             event['risk_level'] = 'critical'
             critical = True
-        if any(x in url_norm for x in ("exploit", "payload", "shellcode", "metasploit")):
+
+        # Exploit: "exploit" and "payload" are common benign words; only escalate if combined with other exploit indicators.
+        exploit_indicators = ("shellcode", "metasploit", "exploit-db", "cve-", "0day")
+        if any(x in focus for x in exploit_indicators) or (("payload" in focus or "exploit" in focus) and ("cve-" in focus or "shellcode" in focus)):
             self.exploit_attempts += 1
             event['threats'].append("EXPLOIT")
             event['risk_level'] = 'critical'
             critical = True
-        if any(x in url_norm for x in ("phish", "verify-account", "suspended", "confirm-identity")):
+
+        # Phishing: keep your detection, but use focus and token-ish checks
+        if any(x in focus for x in ("verify-account", "suspended-account", "confirm-identity", "urgent-action")) or self._token_present(focus, "phish"):
             self.suspicious_hits += 1
             event['threats'].append("PHISHING")
-            event['risk_level'] = 'high'
-        if any(x in url_norm for x in ("tracker", "analytics", "beacon", "doubleclick", "facebook.net", "clearurls", "adguard")):
+            if event['risk_level'] in ("low", "medium"):
+                event['risk_level'] = 'high'
+
+        # Trackers: keep broad detection, but avoid counting "clearurls" as domain risk; it's a keyword only.
+        if any(x in url_norm_l for x in ("tracker", "analytics", "beacon", "doubleclick", "facebook.net", "clearurls", "adguard")):
             self.tracker_hits += 1
             event['threats'].append("TRACKER")
-            if event['risk_level'] == 'low': event['risk_level'] = 'medium'
+            if event['risk_level'] == 'low':
+                event['risk_level'] = 'medium'
 
         # Fingerprint API triggers (simulate Cover Your Tracks test)
+        # Reduce false positives: check in focus first; fallback to full URL if needed.
+        fp_focus = focus if focus else url_norm_l
         for k in self.fingerprint_apis:
-            if k in url_norm:
+            if self._token_present(fp_focus, k) or (k in fp_focus and k in ("webgl", "webrtc", "canvas")):
                 self.fingerprint_apis[k] += 1
                 event['threats'].append(f"FINGERPRINT:{k}")
-                event['risk_level'] = 'medium'
+                if event['risk_level'] == 'low':
+                    event['risk_level'] = 'medium'
                 self.fingerprint_attempts += 1
 
-        # Anomaly detection windows
+        # -------------------------
+        # 4) Anomaly detection windows (bugfix + keep aggressive intent)
+        # -------------------------
         self.request_timestamps.append(now)
-        if len(self.request_timestamps) > 100:
-            self.request_timestamps = self.request_timestamps[-90:]
-        last1s = len([t for t in self.request_timestamps if now-t < 1.0])
+        last1s = sum(1 for t in self.request_timestamps if (now - t) < 1.0)
         if last1s > self.anomaly_threshold:
             event['threats'].append("ANOMALY:burst")
-            event['risk_level'] = 'high'
-        # Rapid redirect loop detection
+            if event['risk_level'] in ("low", "medium"):
+                event['risk_level'] = 'high'
+
+        # Rapid redirect loop detection (unchanged)
         if len(self.redirects) > 7:
             event['threats'].append("ANOMALY:redirect_loop")
-            event['risk_level'] = 'high'
+            if event['risk_level'] in ("low", "medium"):
+                event['risk_level'] = 'high'
 
         self.events.append(event)
 
+        # -------------------------
+        # 5) Lockdown trigger (keep behavior intact; still immediate on critical)
+        # -------------------------
         if event['risk_level'] == 'critical':
             print("\n🔴 [MiniAI] CRITICAL: Lockdown triggered immediately!")
             self.lockdown_active = True
@@ -1093,7 +1225,7 @@ class DarkelfMiniAISentinel:
             'risk_level': 'medium'
         }
         self.events.append(event)
-        print("[MiniAI] 🔒 HTTP blocked:", url[:60])
+        print("[MiniAI] 🔒 HTTP blocked:", str(url)[:60])
 
     # Expanded statistics/report as passive mode
     def get_statistics(self):
@@ -1225,7 +1357,6 @@ TOP 10 THREAT DOMAINS:
             print(self.get_threat_report())
         except Exception as e:
             print("[MiniAI] Report failed:", e)
-            
 # --- Custom Icon helpers (ported from fixed2) ---
 def make_icon(color="#34C759", size=24):
     pix = QPixmap(size, size)
@@ -1449,143 +1580,237 @@ def detect_nav_platform():
 HOMEPAGE = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
+
 <meta charset="UTF-8">
+
 <meta name="viewport" content="width=device-width, initial-scale=1">
+
 <title>Darkelf Browser — Shadow, Private, Hardened</title>
 
-<!-- CSP for Meta (no frame-ancestors, use spaces not semicolons!) -->
-<meta http-equiv="Content-Security-Policy"
-      content="default-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:; form-action https://duckduckgo.com; base-uri 'none'; object-src 'none';">
+<meta name="referrer" content="no-referrer">
+
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:; form-action https://duckduckgo.com; base-uri 'none'; object-src 'none'; frame-src 'none'">
 
 <style>
+
 :root {{
-  --bg:#0a0b10;
-  --accent:#34C759;
-  --border:rgba(255,255,255,.10);
-  --input-bg:#12141b;
-  --input-text:#e5e7eb;
+--bg:#0a0b10;
+--accent:#34C759;
+--border:rgba(255,255,255,.10);
+--input-bg:#12141b;
+--input-text:#e5e7eb;
 }}
 
-* {{ box-sizing:border-box; }}
-html, body {{ height:100%; }}
+* {{
+box-sizing:border-box;
+}}
+
+html,body {{
+height:100%;
+}}
 
 body {{
-  margin:0;
-  font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
-  background:
-    radial-gradient(1200px 600px at 20% -10%,rgba(4,168,200,.25),transparent 60%),
-    radial-gradient(1000px 600px at 120% 10%,rgba(52,199,89,.18),transparent 60%),
-    var(--bg);
-  color:#eef2f6;
-  display:flex;
-  flex-direction:column;
-  justify-content:center;
-  align-items:center;
+
+margin:0;
+
+font-family:
+ui-sans-serif,
+system-ui,
+-apple-system,
+Segoe UI,
+Roboto,
+Helvetica,
+Arial;
+
+background:
+radial-gradient(1200px 600px at 20% -10%,rgba(4,168,200,.25),transparent 60%),
+radial-gradient(1000px 600px at 120% 10%,rgba(52,199,89,.18),transparent 60%),
+var(--bg);
+
+color:#eef2f6;
+
+display:flex;
+flex-direction:column;
+justify-content:center;
+align-items:center;
+
 }}
 
 .brand {{
-  display:flex;
-  gap:10px;
-  align-items:center;
-  justify-content:center;
-  font-weight:700;
-  font-size:2rem;
+
+display:flex;
+gap:12px;
+align-items:center;
+justify-content:center;
+
+font-weight:700;
+font-size:2rem;
+
+}}
+
+.brand svg {{
+
+filter:drop-shadow(0 0 6px rgba(52,199,89,.6));
+
 }}
 
 .tagline {{
-  font-size:.95rem;
-  font-weight:700;
-  letter-spacing:.18em;
-  text-transform:uppercase;
-  color:#cfd8e3;
-  margin:6px 0 20px;
+
+font-size:.9rem;
+font-weight:700;
+letter-spacing:.20em;
+text-transform:uppercase;
+
+color:#cfd8e3;
+
+margin:8px 0 24px;
+
 }}
 
 .search-wrap {{
-  display:flex;
-  align-items:stretch;
-  gap:10px;
-  justify-content:center;
+
+display:flex;
+gap:10px;
+
 }}
 
 .search-wrap input {{
-  height:48px;
-  padding:0 16px;
-  width:min(720px,92vw);
-  border-radius:12px;
-  border:1px solid var(--border);
-  background:var(--input-bg);
-  color:var(--input-text);
-  font-size:16px;
-  outline:none;
+
+height:48px;
+padding:0 16px;
+
+width:min(720px,92vw);
+
+border-radius:12px;
+border:1px solid var(--border);
+
+background:var(--input-bg);
+color:var(--input-text);
+
+font-size:16px;
+
+outline:none;
+
 }}
 
 .search-wrap input::placeholder {{
-  color:#9aa3ad;
+color:#9aa3ad;
 }}
 
 .search-wrap input:focus {{
-  box-shadow:0 0 0 3px rgba(52,199,89,.30);
-  border-color:transparent;
+
+box-shadow:0 0 0 3px rgba(52,199,89,.30);
+border-color:transparent;
+
 }}
 
 .search-wrap button {{
-  width:48px;
-  height:48px;
-  border-radius:12px;
-  border:none;
-  cursor:pointer;
-  font-size:20px;
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  color:#fff;
-  background:var(--accent);
+
+width:48px;
+height:48px;
+
+border-radius:12px;
+border:none;
+
+cursor:pointer;
+
+display:flex;
+align-items:center;
+justify-content:center;
+
+background:var(--accent);
+color:white;
+
+transition:transform .15s;
+
+}}
+
+.search-wrap button:hover {{
+transform:scale(1.05);
 }}
 
 .search-wrap button:focus {{
-  outline:2px solid #34C759;
+outline:2px solid #34C759;
 }}
+
+@media (prefers-reduced-motion: reduce) {{
+
+.search-wrap button:hover {{
+transform:none;
+}}
+
+}}
+
 </style>
 </head>
 
 <body>
 
 <div class="brand">
-  <svg width="32" height="32" aria-hidden="true">
-    <ellipse cx="16" cy="16" rx="13" ry="14"
-             fill="#111b13"
-             stroke="#34C759"
-             stroke-width="2"/>
-  </svg>
-  <span style="color:#34C759">Darkelf Browser</span>
+
+<svg width="32" height="32" viewBox="0 0 32 32" aria-hidden="true">
+
+<ellipse
+cx="16"
+cy="16"
+rx="13"
+ry="14"
+fill="none"
+stroke="#34C759"
+stroke-width="2"/>
+
+</svg>
+
+<span style="color:#34C759">Darkelf Browser</span>
+
 </div>
 
-<div class="tagline">SHADOW • PRIVATE • HARDENED</div>
+<div class="tagline">
+SHADOW • PRIVATE • HARDENED
+</div>
 
-<form class="search-wrap"
-      action="{DUCK_LITE_HTTPS}"
-      method="get"
-      role="search"
-      aria-label="Search DuckDuckGo">
+<form
+class="search-wrap"
+action="{DUCK_LITE_HTTPS}"
+method="get"
+role="search"
+aria-label="Search DuckDuckGo">
 
-  <input type="text"
-         name="q"
-         placeholder="Search DuckDuckGo"
-         autocomplete="off"
-         aria-label="Search query">
+<input
+type="search"
+name="q"
 
-  <button type="submit" aria-label="Search">
-    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-      <path d="M10 3a7 7 0 1 1 0 14 7 7 0 0 1 0-14zm0 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10zm9.707 12.293l-3.387-3.387a1 1 0 0 0-1.414 1.414l3.387 3.387a1 1 0 0 0 1.414-1.414z"/>
-    </svg>
-  </button>
+placeholder="Search DuckDuckGo"
+
+autocomplete="off"
+autocapitalize="off"
+spellcheck="false"
+inputmode="search"
+
+aria-label="Search query">
+
+<button type="submit" aria-label="Search">
+
+<svg viewBox="0 0 24 24" width="22" height="22">
+
+<path fill="currentColor"
+d="M10 3a7 7 0 1 1 0 14
+7 7 0 0 1 0-14zm0 2
+a5 5 0 1 0 0 10
+5 5 0 0 0 0-10zm9.7 12.3
+l-3.38-3.38a1 1 0 0 0-1.42 1.42
+l3.38 3.38a1 1 0 0 0 1.42-1.42z"/>
+
+</svg>
+
+</button>
 
 </form>
 
 </body>
 </html>
 """
+
 
 class HardenedWebPage(QWebEnginePage):
     def __init__(self, parent=None, profile=None, canvas_seed=None):
@@ -2424,14 +2649,13 @@ class HardenedWebPage(QWebEnginePage):
         
         spoof_json = json.dumps(spoof)
 
-        js = """
+        js = f"""
         (() => {{
           if (window.__darkelf_iframe_harmonizer) return;
           window.__darkelf_iframe_harmonizer = true;
 
-          const SPOOF = {JSON.parse('%');
-
-          SPOOF.userAgent = navigator.userAgent;
+          const SPOOF = {json.dumps(spoof)};
+          try {{ SPOOF.userAgent = navigator.userAgent; }} catch(e) {{}}
 
           function def(obj, prop, getter) {{
             try {{
@@ -2611,10 +2835,19 @@ class HardenedWebPage(QWebEnginePage):
     def createWindow(self, _type):
         parent_view = getattr(self, "_parent_view", None)
         main_window = parent_view.window() if parent_view else None
-        has_tabs = bool(main_window and hasattr(main_window, "tabs"))
 
-        view_parent = main_window if has_tabs else parent_view
-        view = QWebEngineView(view_parent)
+        # If this page belongs to the main browser window
+        if isinstance(main_window, DarkelfBrowser):
+
+            # Create a proper Darkelf tab
+            main_window._add_tab()
+
+            # Return the page of the new tab
+            view = main_window.tabs.currentWidget()
+            return view.page()
+
+        # fallback if not inside the main window
+        view = QWebEngineView(parent_view)
 
         try:
             page = HardenedWebPage(view, self.profile())
@@ -2629,40 +2862,7 @@ class HardenedWebPage(QWebEnginePage):
         except Exception:
             pass
 
-        if has_tabs:
-
-            idx = main_window.tabs.addTab(view, "New Tab")
-            main_window.tabs.setCurrentIndex(idx)
-
-            # DO NOT enable Qt close buttons
-            main_window.tabs.setTabsClosable(False)
-
-            # Add your custom green close button
-            close_btn = QPushButton("×")
-            close_btn.setFixedSize(16, 16)
-            close_btn.setCursor(Qt.PointingHandCursor)
-
-            close_btn.setStyleSheet("""
-                QPushButton {
-                    background: #34C759;
-                    color: #0a0b10;
-                    border: none;
-                    border-radius: 8px;
-                    font-weight: bold;
-                }
-                QPushButton:hover {
-                    background: #2fb14e;
-                }
-            """)
-
-            close_btn.clicked.connect(
-                lambda _, v=view: main_window.close_tab(main_window.tabs.indexOf(v))
-            )
-
-            main_window.tabs.tabBar().setTabButton(idx, QTabBar.RightSide, close_btn)
-
-        else:
-            view.show()
+        view.show()
 
         if not hasattr(self, "_spawned_views"):
             self._spawned_views = []
@@ -2755,44 +2955,43 @@ class DarkelfBrowser(QMainWindow):
         self.setWindowTitle("")
         self.resize(1200, 800)
 
-        # Use profile passed in
         self.shared_profile = profile
 
         print("OffTheRecord:", self.shared_profile.isOffTheRecord())
 
-        # Load EasyList
         self.easy = EasyListEngine()
         self.easy.load_and_build(EASYLIST_URLS)
 
         print("Loaded network rules:", len(self.easy.network_rules))
 
-        # Darkelf MiniAI
         self.mini_ai = DarkelfMiniAISentinel()
 
         self.interceptor = StealthInterceptor(
             self.easy,
             self.mini_ai
         )
-        self.shared_profile._darkelf_interceptor = self.interceptor  # extra safety
+        self.shared_profile._darkelf_interceptor = self.interceptor
         self.shared_profile.setUrlRequestInterceptor(self.interceptor)
-        
-        # Create UI
-        self.tabs = QTabWidget()
-        self.setCentralWidget(self.tabs)
-        
-        self.tabs.setTabsClosable(False)
-        self.tabs.tabCloseRequested.connect(self.close_tab)
-        
-        self.toolbar = self._make_toolbar()
-        self.addToolBar(Qt.TopToolBarArea, self.toolbar)
 
-        QApplication.instance().aboutToQuit.connect(self._cleanup_webengine)
-        self._add_tab(home=True)
-        
-        self._download_dir = _safe_download_dir()
-        self._downloaded_files: list[str] = []
-        self._hook_secure_downloads()
-        
+        # -----------------------------
+        # Create UI
+        # -----------------------------
+        self.tabs = QTabWidget()
+
+        # enable close buttons
+        self.tabs.setTabsClosable(True)
+        self.tabs.setMovable(True)
+
+        # connect close signal
+        self.tabs.tabCloseRequested.connect(self.close_tab)
+
+        # ensure tabbar supports close buttons
+        tabbar = self.tabs.tabBar()
+        tabbar.setTabsClosable(True)
+
+        # -----------------------------
+        # Download shelf
+        # -----------------------------
         self.download_shelf = DownloadShelf()
         self.download_shelf.hide()
 
@@ -2803,25 +3002,55 @@ class DarkelfBrowser(QMainWindow):
         container = QWidget()
         container.setLayout(self.tabs_layout)
 
+        # ONLY CALL setCentralWidget ONCE
         self.setCentralWidget(container)
 
+        # -----------------------------
+        # Apply tab styling
+        # -----------------------------
+        self._set_tab_style()
+
+        # -----------------------------
+        # Toolbar
+        # -----------------------------
+        self.toolbar = self._make_toolbar()
+        self.addToolBar(Qt.TopToolBarArea, self.toolbar)
+
+        # -----------------------------
+        # Startup tab
+        # -----------------------------
+        QApplication.instance().aboutToQuit.connect(self._cleanup_webengine)
+        self._add_tab(home=True)
+
+        # -----------------------------
+        # Downloads
+        # -----------------------------
+        self._download_dir = _safe_download_dir()
+        self._downloaded_files: list[str] = []
+        self._hook_secure_downloads()
+
         QApplication.instance().aboutToQuit.connect(self._wipe_download_traces)
-        
+
+        # -----------------------------
+        # Hotkeys
+        # -----------------------------
         self.setup_hotkeys()
-        
-                # Clean-Up
+
+        # -----------------------------
+        # Memory cleanup timers
+        # -----------------------------
         self.cleanup_timer = QTimer(self)
         self.cleanup_timer.setSingleShot(True)
         self.cleanup_timer.timeout.connect(self.memory_cleanup)
-        
+
         self.maintenance_timer = QTimer(self)
         self.maintenance_timer.timeout.connect(self.memory_cleanup)
         self.maintenance_timer.start(300000)
-        
+
         self.renderer_cleanup_timer = QTimer(self)
         self.renderer_cleanup_timer.timeout.connect(self.release_renderer_memory)
-        self.renderer_cleanup_timer.start(600000)  # every 10 minutes
-        
+        self.renderer_cleanup_timer.start(600000)
+
     def release_renderer_memory(self):
         try:
             for i in range(self.tabs.count()):
@@ -2848,7 +3077,6 @@ class DarkelfBrowser(QMainWindow):
 
         
     def close_tab(self):
-        i = self.tabs.currentIndex()
         if i >= 0:
             self.tabs.removeTab(i)
             self.debounce_cleanup()
@@ -3006,26 +3234,32 @@ class DarkelfBrowser(QMainWindow):
     def _set_tab_style(self):
         self.tabs.setStyleSheet("""
         QTabWidget::pane {
-            border: none;
+            border: 0;
         }
 
         QTabBar::tab {
-            background: #111412;
-            color: #e5e7eb;
-            padding: 4px 14px;
-            margin: 4px 6px;
-            border-radius: 12px;
-            min-height: 24px;
+            background: #333;
+            color: #fff;
+            padding: 5px 10px;
+            border-radius: 10px;
+            margin: 2px;
         }
 
-        QTabBar::tab:selected {
-            background: #34C759;
-            color: #0a0b10;
-            font-weight: bold;
-        }
-
+        QTabBar::tab:selected,
         QTabBar::tab:hover {
-            background: #1f2a24;
+            background: #34C759;
+            color: #000;
+        }
+
+        /* force Qt close icon */
+        QTabBar::close-button {
+            image: url(:/qt-project.org/styles/commonstyle/images/standardbutton-close-16.png);
+            background: transparent;
+            border: none;
+        }
+
+        QTabBar::close-button:hover {
+            background: transparent;
         }
         """)
 
@@ -3098,29 +3332,6 @@ class DarkelfBrowser(QMainWindow):
         )
 
         idx = self.tabs.addTab(view, "New Tab")
-        
-        from PySide6.QtWidgets import QPushButton
-
-        close_btn = QPushButton("×")
-        close_btn.setFixedSize(16, 16)
-        close_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #1f2a24;
-                color: #34C759;
-                border-radius: 8px;
-                font-weight: bold;
-                border: none;
-            }
-            QPushButton:hover {
-                background-color: #34C759;
-                color: #0a0b10;
-            }
-        """)
-
-        close_btn.clicked.connect(lambda _, i=idx: self.close_tab(self.tabs.indexOf(view)))
-
-        self.tabs.tabBar().setTabButton(idx, QTabBar.RightSide, close_btn)
-
         self.tabs.setCurrentIndex(idx)
 
         view.urlChanged.connect(self._sync_urlbar)
@@ -3139,33 +3350,48 @@ class DarkelfBrowser(QMainWindow):
 
         if home:
             view.setHtml(HOMEPAGE)
+
+        elif url and url.startswith("view-source:"):
+            real_url = url.replace("view-source:", "")
+            view.load(QUrl(real_url))
+            view.page().toHtml(lambda html: self._show_source_tab(html))
+
         else:
             view.load(QUrl(url or "https://duckduckgo.com/lite/"))
+        
+    def _show_source_tab(self, html):
+        view = QWebEngineView(self)
+        view.setHtml(f"<pre style='white-space:pre-wrap;font-family:monospace'>{html.replace('<','&lt;')}</pre>")
+        idx = self.tabs.addTab(view, "Source")
+        self.tabs.setCurrentIndex(idx)
 
     def close_tab(self, idx):
         w = self.tabs.widget(idx)
 
-        # Remove the tab from the UI FIRST
         self.tabs.removeTab(idx)
 
         if isinstance(w, QWebEngineView):
             try:
-                # Stop media
                 w.page().runJavaScript(
                     "document.querySelectorAll('video,audio').forEach(m=>{try{m.pause(); m.src='';}catch(e){}})"
                 )
             except Exception:
                 pass
 
-            # Stop loading + release resources
-            w.page().triggerAction(QWebEnginePage.Stop)
-            w.page().setAudioMuted(True)
-            w.setUrl(QUrl("about:blank"))
+            try:
+                w.page().triggerAction(QWebEnginePage.Stop)
+                w.page().setAudioMuted(True)
+                w.setUrl(QUrl("about:blank"))
+            except Exception:
+                pass
 
-            # Proper deletion
             w.page().deleteLater()
             w.deleteLater()
-            
+
+        # reopen homepage if all tabs closed
+        if self.tabs.count() == 0:
+            self._add_tab(home=True)
+
     def take_snapshot(self):
         view = self.tabs.currentWidget()
         if not view:
