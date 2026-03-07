@@ -9,7 +9,7 @@ import gc
 from PySide6.QtCore import Qt, QUrl, QUrlQuery, QSize, QPointF, QRectF, QTimer
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLineEdit, QToolBar, QPushButton, QLabel, QWidget,
-    QTabWidget, QTabBar, QMessageBox, QToolButton, QProgressBar,
+    QTabWidget, QTabBar, QMessageBox, QToolButton, QProgressBar, QMenu, QWidgetAction, QGridLayout,
     QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QProgressDialog
 )
 from PySide6.QtGui import (
@@ -1358,14 +1358,22 @@ TOP 10 THREAT DOMAINS:
         except Exception as e:
             print("[MiniAI] Report failed:", e)
 # --- Custom Icon helpers (ported from fixed2) ---
-def make_icon(color="#34C759", size=24):
+def make_icon(color=None, size=24):
+
+    if color is None:
+        color = "#34C759"
+
     pix = QPixmap(size, size)
     pix.fill(Qt.transparent)
+
     p = QPainter(pix)
     p.setRenderHint(QPainter.Antialiasing)
+
     p.setBrush(QColor(color))
     p.setPen(Qt.PenStyle.NoPen)
+
     p.drawEllipse(4, 4, size-8, size-8)
+
     p.end()
     return QIcon(pix)
 
@@ -1577,39 +1585,46 @@ def detect_nav_platform():
     return sys.platform
 
 
-HOMEPAGE = f"""<!DOCTYPE html>
+HOMEPAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
 
 <meta charset="UTF-8">
-
 <meta name="viewport" content="width=device-width, initial-scale=1">
 
 <title>Darkelf Browser — Shadow, Private, Hardened</title>
 
 <meta name="referrer" content="no-referrer">
 
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:; form-action https://duckduckgo.com; base-uri 'none'; object-src 'none'; frame-src 'none'">
+<meta http-equiv="Content-Security-Policy"
+content="default-src 'self' data:;
+style-src 'unsafe-inline';
+script-src 'unsafe-inline';
+img-src 'self' data:;
+form-action https://duckduckgo.com;
+base-uri 'none';
+object-src 'none';
+frame-src 'none'">
 
 <style>
 
-:root {{
+:root {
 --bg:#0a0b10;
---accent:#34C759;
+--accent:ACCENT_COLOR;
 --border:rgba(255,255,255,.10);
 --input-bg:#12141b;
 --input-text:#e5e7eb;
-}}
+}
 
-* {{
+* {
 box-sizing:border-box;
-}}
+}
 
-html,body {{
+html,body {
 height:100%;
-}}
+}
 
-body {{
+body {
 
 margin:0;
 
@@ -1624,7 +1639,8 @@ Arial;
 
 background:
 radial-gradient(1200px 600px at 20% -10%,rgba(4,168,200,.25),transparent 60%),
-radial-gradient(1000px 600px at 120% 10%,rgba(52,199,89,.18),transparent 60%),
+radial-gradient(1000px 600px at 120% 10%,color-mix(in srgb, var(--accent) 20%, transparent),transparent 60%),
+
 var(--bg);
 
 color:#eef2f6;
@@ -1634,9 +1650,9 @@ flex-direction:column;
 justify-content:center;
 align-items:center;
 
-}}
+}
 
-.brand {{
+.brand {
 
 display:flex;
 gap:12px;
@@ -1646,15 +1662,17 @@ justify-content:center;
 font-weight:700;
 font-size:2rem;
 
-}}
+color:var(--accent);
 
-.brand svg {{
+}
 
-filter:drop-shadow(0 0 6px rgba(52,199,89,.6));
+.brand svg {
 
-}}
+filter:drop-shadow(0 0 6px var(--accent));
 
-.tagline {{
+}
+
+.tagline {
 
 font-size:.9rem;
 font-weight:700;
@@ -1665,16 +1683,14 @@ color:#cfd8e3;
 
 margin:8px 0 24px;
 
-}}
+}
 
-.search-wrap {{
-
+.search-wrap {
 display:flex;
 gap:10px;
+}
 
-}}
-
-.search-wrap input {{
+.search-wrap input {
 
 height:48px;
 padding:0 16px;
@@ -1688,23 +1704,21 @@ background:var(--input-bg);
 color:var(--input-text);
 
 font-size:16px;
-
 outline:none;
 
-}}
+}
 
-.search-wrap input::placeholder {{
+.search-wrap input::placeholder {
 color:#9aa3ad;
-}}
+}
 
-.search-wrap input:focus {{
+.search-wrap input:focus {
 
-box-shadow:0 0 0 3px rgba(52,199,89,.30);
-border-color:transparent;
+box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent);
+border-color:var(--accent);
 
-}}
-
-.search-wrap button {{
+}
+.search-wrap button {
 
 width:48px;
 height:48px;
@@ -1723,23 +1737,15 @@ color:white;
 
 transition:transform .15s;
 
-}}
+}
 
-.search-wrap button:hover {{
+.search-wrap button:hover {
 transform:scale(1.05);
-}}
+}
 
-.search-wrap button:focus {{
-outline:2px solid #34C759;
-}}
-
-@media (prefers-reduced-motion: reduce) {{
-
-.search-wrap button:hover {{
-transform:none;
-}}
-
-}}
+.search-wrap button:focus {
+outline:2px solid var(--accent);
+}
 
 </style>
 </head>
@@ -1756,12 +1762,12 @@ cy="16"
 rx="13"
 ry="14"
 fill="none"
-stroke="#34C759"
+stroke="var(--accent)"
 stroke-width="2"/>
 
 </svg>
 
-<span style="color:#34C759">Darkelf Browser</span>
+<span>Darkelf Browser</span>
 
 </div>
 
@@ -1779,20 +1785,16 @@ aria-label="Search DuckDuckGo">
 <input
 type="search"
 name="q"
-
 placeholder="Search DuckDuckGo"
-
 autocomplete="off"
 autocapitalize="off"
 spellcheck="false"
 inputmode="search"
-
 aria-label="Search query">
 
 <button type="submit" aria-label="Search">
 
 <svg viewBox="0 0 24 24" width="22" height="22">
-
 <path fill="currentColor"
 d="M10 3a7 7 0 1 1 0 14
 7 7 0 0 1 0-14zm0 2
@@ -1800,7 +1802,6 @@ a5 5 0 1 0 0 10
 5 5 0 0 0 0-10zm9.7 12.3
 l-3.38-3.38a1 1 0 0 0-1.42 1.42
 l3.38 3.38a1 1 0 0 0 1.42-1.42z"/>
-
 </svg>
 
 </button>
@@ -1810,7 +1811,6 @@ l3.38 3.38a1 1 0 0 0 1.42-1.42z"/>
 </body>
 </html>
 """
-
 
 class HardenedWebPage(QWebEnginePage):
     def __init__(self, parent=None, profile=None, canvas_seed=None):
@@ -2947,11 +2947,74 @@ class DownloadShelf(QWidget):
 
         if self.layout.count() == 0:
             self.hide()
+            
+def create_color_palette_menu(parent, callback):
 
+    menu = QMenu(parent)
+
+    # palette widget INSIDE the menu
+    palette = QWidget(menu)
+
+    grid = QGridLayout(palette)
+    grid.setSpacing(2)
+    grid.setContentsMargins(4,4,4,4)
+
+    colors = [
+        "#34C759",
+        "#444444","#666666","#999999",
+        "#ff4d4f","#ff7a45","#ffa940",
+        "#ffd666","#73d13d","#36cfc9","#40a9ff",
+        "#597ef7","#9254de","#f759ab","#bfbfbf"
+    ]
+
+    row = 0
+    col = 0
+
+    for color_hex in colors:
+
+        btn = QPushButton()
+        btn.setFixedSize(20,20)
+
+        btn.setStyleSheet(
+            f"""
+            QPushButton {{
+                background:{color_hex};
+                border:1px solid #555;
+            }}
+            QPushButton:hover {{
+                border:2px solid white;
+            }}
+            """
+        )
+
+        # important: capture color safely
+        btn.clicked.connect(lambda _, c=color_hex: callback(QColor(c)))
+
+        grid.addWidget(btn, row, col)
+
+        col += 1
+        if col == 8:
+            col = 0
+            row += 1
+
+    action = QWidgetAction(menu)
+    action.setDefaultWidget(palette)
+
+    menu.addAction(action)
+
+    return menu
+
+# ------------------------------------------------
+# Main browser class
+# ------------------------------------------------
 class DarkelfBrowser(QMainWindow):
     def __init__(self, profile):
         super().__init__()
         
+        self.accent_color = "#34C759"
+
+        self.toolbar = self._make_toolbar()
+
         self.setWindowTitle("")
         self.resize(1200, 800)
 
@@ -3009,6 +3072,8 @@ class DarkelfBrowser(QMainWindow):
         # Apply tab styling
         # -----------------------------
         self._set_tab_style()
+        
+        self.set_accent_color(QColor(self.accent_color))
 
         # -----------------------------
         # Toolbar
@@ -3140,21 +3205,28 @@ class DarkelfBrowser(QMainWindow):
         return QIcon(pix)
     
     def _make_toolbar(self):
+
         tb = QToolBar()
         tb.setMovable(False)
         tb.setIconSize(QSize(22, 22))
 
-        self.back_action = QAction(make_nav_arrow_icon("left", "#34C759", 22), "Back", self)
-        self.fwd_action = QAction(make_nav_arrow_icon("right", "#34C759", 22), "Forward", self)
-        self.reload_action = QAction(make_reload_icon("#34C759", 22), "Reload", self)
-        self.home_action = QAction(make_house_icon("#34C759", 22), "Home", self)
-        self.zoom_in_action = QAction(make_zoom_icon("+", "#34C759", 20), "Zoom In", self)
-        self.zoom_out_action = QAction(make_zoom_icon("-", "#34C759", 20), "Zoom Out", self)
-        self.full_action = QAction(make_fullscreen_icon("#34C759", 20), "Full Screen", self)
+        c = self.accent_color
+
+        self.back_action = QAction(make_nav_arrow_icon("left", c, 22), "Back", self)
+        self.fwd_action = QAction(make_nav_arrow_icon("right", c, 22), "Forward", self)
+        self.reload_action = QAction(make_reload_icon(c, 22), "Reload", self)
+        self.home_action = QAction(make_house_icon(c, 22), "Home", self)
+        self.zoom_in_action = QAction(make_zoom_icon("+", c, 20), "Zoom In", self)
+        self.zoom_out_action = QAction(make_zoom_icon("-", c, 20), "Zoom Out", self)
+        self.full_action = QAction(make_fullscreen_icon(c, 20), "Full Screen", self)
+
+
+        self.java_action = QAction(make_java_icon(self.accent_color, 18), "JavaScript", self)
         self.nuke_action = QAction(make_nuke_icon("#ff2a2a", 18), "Nuke", self)
+
+        self.addtab_action = QAction(make_icon(c, 20), "New Tab", self)
+
         self.nuke_action.triggered.connect(self.nuke_all_data)
-        self.java_action = QAction(make_java_icon("#f89820", 18), "JavaScript", self)
-        self.addtab_action = QAction(make_icon("#34C759", 20), "New Tab", self)
 
         self.back_action.triggered.connect(self.go_back)
         self.fwd_action.triggered.connect(self.go_fwd)
@@ -3184,31 +3256,62 @@ class DarkelfBrowser(QMainWindow):
         )
         self.lock_action.setVisible(False)
         
-        self.addr.setStyleSheet("""
-        QLineEdit {
+        self.addr.setStyleSheet(f"""
+        QLineEdit {{
             background-color: #12141b;
             color: #eafaf0;
-            border: 1px solid #34C759;
+            border: 1px solid {self.accent_color};
             border-radius: 6px;
             padding: 4px 8px;
-            selection-background-color: #34C759;
+            selection-background-color: {self.accent_color};
             selection-color: #0a0b10;
-        }
+        }}
         """)
+
 
         tb.addAction(self.zoom_out_action)
         tb.addAction(self.zoom_in_action)
         tb.addAction(self.full_action)
         tb.addAction(self.addtab_action)
+        
+        # ---- Accent color picker ----
+
+        self.color_btn = QToolButton()
+        self.color_btn.setText("◈")  # cyber style icon
+        self.color_btn.setFixedSize(28, 24)
+
+        self.color_btn.setStyleSheet(f"""
+        QToolButton {{
+            background: transparent;
+            color: {self.accent_color};
+            border: none;
+            font-size: 16px;
+        }}
+
+        QToolButton:hover {{
+            color: white;
+        }}
+        """)
+
+        self.color_btn.setMenu(
+            create_color_palette_menu(self, self.set_accent_color)
+        )
+
+        self.color_btn.setPopupMode(QToolButton.InstantPopup)
+
+
+        tb.addWidget(self.color_btn)
+
 
         tb.addSeparator()
-        tb.addAction(self.nuke_action)
 
         self.java_action.setCheckable(True)
         self.java_action.setChecked(True)
         self.java_action.setToolTip("Enable/Disable JavaScript globally")
         tb.addAction(self.java_action)
-
+        
+        tb.addAction(self.nuke_action)
+        
         def update_js_icon():
             enabled = self.java_action.isChecked()
             color = "#f89820" if enabled else "#bbbbbb"
@@ -3219,6 +3322,148 @@ class DarkelfBrowser(QMainWindow):
 
         tb.addSeparator()
         return tb
+                
+    def set_accent_color(self, color):
+
+        self.accent_color = color.name()
+        c = self.accent_color
+
+        # update Qt highlight palette (text selection, menus, etc.)
+        app = QApplication.instance()
+        palette = app.palette()
+        palette.setColor(QPalette.Highlight, QColor(c))
+        palette.setColor(QPalette.HighlightedText, QColor("#0a0b10"))
+        palette.setColor(QPalette.Link, QColor(c))
+        palette.setColor(QPalette.LinkVisited, QColor(c))
+        app.setPalette(palette)
+
+        # update toolbar icons
+        self.back_action.setIcon(make_nav_arrow_icon("left", c, 22))
+        self.fwd_action.setIcon(make_nav_arrow_icon("right", c, 22))
+        self.reload_action.setIcon(make_reload_icon(c, 22))
+        self.home_action.setIcon(make_house_icon(c, 22))
+        self.zoom_in_action.setIcon(make_zoom_icon("+", c, 20))
+        self.zoom_out_action.setIcon(make_zoom_icon("-", c, 20))
+        self.full_action.setIcon(make_fullscreen_icon(c, 20))
+        self.addtab_action.setIcon(make_icon(c, 20))
+        self.java_action.setIcon(make_java_icon(c, 18))
+        
+        self.addr.setStyleSheet(f"""
+        QLineEdit {{
+            background-color: #12141b;
+            color: #eafaf0;
+            border: 1px solid {c};
+            border-radius: 6px;
+            padding: 4px 8px;
+            selection-background-color: {c};
+            selection-color: #0a0b10;
+        }}
+        """)
+
+        # update diamond palette button
+        self.color_btn.setStyleSheet(f"""
+        QToolButton {{
+            background: transparent;
+            color: {c};
+            border: none;
+            font-size: 16px;
+        }}
+
+        QToolButton:hover {{
+            color: white;
+        }}
+        """)
+
+        # update application stylesheet
+        QApplication.instance().setStyleSheet(f"""
+            QMainWindow {{
+                background-color: #0b0f14;
+            }}
+
+            QWidget {{
+                background-color: #0b0f14;
+                color: white;
+            }}
+
+            QLineEdit {{
+                background-color: #111;
+                color: white;
+                border: 1px solid #444;
+                border-radius: 6px;
+                padding: 4px;
+            }}
+
+            QLineEdit:focus {{
+                border: 1px solid {c};
+            }}
+
+            QToolBar {{
+                background-color: #0b0f14;
+                border-bottom: 1px solid #222;
+            }}
+
+            QPushButton {{
+                background-color: #111;
+                color: white;
+                border: 1px solid #444;
+                border-radius: 4px;
+            }}
+
+            QPushButton:hover {{
+                border: 1px solid {c};
+            }}
+
+            QPushButton#accent {{
+                background-color: {c};
+                color: black;
+                border: none;
+            }}
+
+            QLabel#accentText {{
+                color: {c};
+                font-weight: bold;
+            }}
+
+            QTabBar::tab:selected {{
+                border-bottom: 2px solid {c};
+            }}
+
+            /* -------- FIX CONTEXT MENUS -------- */
+
+            QMenu {{
+                background-color: #0b0f14;
+                border: 1px solid #222;
+                padding: 4px;
+            }}
+
+            QMenu::item {{
+                color: #eafaf0;
+                padding: 6px 18px;
+                background: transparent;
+            }}
+
+            QMenu::item:selected {{
+                background: {c};
+                color: #0a0b10;
+                border-radius: 4px;
+            }}
+
+            QMenu::separator {{
+                height: 1px;
+                background: #222;
+                margin: 4px 6px;
+            }}
+        """)
+
+        self._set_tab_style()
+        
+        for i in range(self.tabs.count()):
+            view = self.tabs.widget(i)
+
+        # refresh only homepage tabs
+            if view.url().toString().startswith("data:text/html"):
+                html = HOMEPAGE.replace("ACCENT_COLOR", self.accent_color)
+                view.setHtml(html)
 
     def _configure_tabbar_small(self):
         bar = self.tabs.tabBar()
@@ -3232,35 +3477,40 @@ class DarkelfBrowser(QMainWindow):
         """)
 
     def _set_tab_style(self):
-        self.tabs.setStyleSheet("""
-        QTabWidget::pane {
-            border: 0;
-        }
 
-        QTabBar::tab {
+        if not hasattr(self, "tabs"):
+            return
+
+        c = self.accent_color
+
+        self.tabs.setStyleSheet(f"""
+        QTabWidget::pane {{
+            border: 0;
+        }}
+
+        QTabBar::tab {{
             background: #333;
             color: #fff;
             padding: 5px 10px;
             border-radius: 10px;
             margin: 2px;
-        }
+        }}
 
         QTabBar::tab:selected,
-        QTabBar::tab:hover {
-            background: #34C759;
+        QTabBar::tab:hover {{
+            background: {c};
             color: #000;
-        }
+        }}
 
-        /* force Qt close icon */
-        QTabBar::close-button {
+        QTabBar::close-button {{
             image: url(:/qt-project.org/styles/commonstyle/images/standardbutton-close-16.png);
             background: transparent;
             border: none;
-        }
+        }}
 
-        QTabBar::close-button:hover {
+        QTabBar::close-button:hover {{
             background: transparent;
-        }
+        }}
         """)
 
     @staticmethod
@@ -3349,7 +3599,8 @@ class DarkelfBrowser(QMainWindow):
         view.iconChanged.connect(set_icon)
 
         if home:
-            view.setHtml(HOMEPAGE)
+            html = HOMEPAGE.replace("ACCENT_COLOR", self.accent_color)
+            view.setHtml(html)
 
         elif url and url.startswith("view-source:"):
             real_url = url.replace("view-source:", "")
@@ -3502,7 +3753,9 @@ class DarkelfBrowser(QMainWindow):
         if v: v.reload()
     def go_home(self):
         v = self.current_view()
-        if v: v.setHtml(HOMEPAGE)
+        if v:
+            html = HOMEPAGE.replace("ACCENT_COLOR", self.accent_color)
+            v.setHtml(html)
     def zoom_in(self):
         v = self.current_view()
         if v: v.setZoomFactor(v.zoomFactor() + 0.1)
@@ -3532,17 +3785,17 @@ class DarkelfBrowser(QMainWindow):
 
         if qurl.scheme() == "https":
             self.lock_action.setVisible(True)
-            self.addr.setStyleSheet("""
-                QLineEdit {
-                    color: #00ff66;
+            self.addr.setStyleSheet(f"""
+                QLineEdit {{
+                    color: {self.accent_color};
                     font-weight: bold;
-                }
+                }}
             """)
         else:
             self.lock_action.setVisible(False)
             self.addr.setStyleSheet("""
                 QLineEdit {
-                    color: #eafaf0;
+                    color: #cfd8e3;
                     font-weight: normal;
                 }
             """)
