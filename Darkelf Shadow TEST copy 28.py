@@ -43,8 +43,8 @@ except:
 import urllib.request
 from urllib.error import URLError, HTTPError
     
-#devnull = open(os.devnull, 'w')
-#os.dup2(devnull.fileno(), sys.stderr.fileno())
+devnull = open(os.devnull, 'w')
+os.dup2(devnull.fileno(), sys.stderr.fileno())
 
 # ===================== Secure No-Trace Downloads helpers =====================
 
