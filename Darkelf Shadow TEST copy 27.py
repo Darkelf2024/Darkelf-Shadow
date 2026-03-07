@@ -893,10 +893,12 @@ class StealthInterceptor(QWebEngineUrlRequestInterceptor):
         # 6️⃣ EasyList Blocking (FIXED SIGNATURE)
         # --------------------------------------------------
         try:
-           # if self.engine and self.engine.should_block(req_url, fp_url, req_type):
+            if self.engine and self.engine.should_block(req_url, fp_url, req_type):
                 print("BLOCKED:", req_type, fp_url, "->", req_url)
                 if self.mini_ai:
                     self.mini_ai.monitor_network(req_url)
+                info.block(True)
+                return
         except Exception as e:
             print("Interceptor error:", e)
             return
