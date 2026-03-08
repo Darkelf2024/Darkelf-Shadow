@@ -43,8 +43,8 @@ except:
 import urllib.request
 from urllib.error import URLError, HTTPError
     
-devnull = open(os.devnull, 'w')
-os.dup2(devnull.fileno(), sys.stderr.fileno())
+#devnull = open(os.devnull, 'w')
+#os.dup2(devnull.fileno(), sys.stderr.fileno())
 
 # ===================== Secure No-Trace Downloads helpers =====================
 
@@ -1024,7 +1024,8 @@ class DarkelfMiniAISentinel:
             'geolocation': 0, 'media_devices': 0, 'webrtc': 0,
         }
         self.request_timestamps = deque(maxlen=100)
-        self.anomaly_threshold = 100  # Aggressive!
+        self.anomaly_threshold = 150  # Aggressive!
+        self.flood_threshold = 3500
         
         # Static assets that should not trigger anomaly detection
         self.static_extensions = (
@@ -1088,18 +1089,23 @@ class DarkelfMiniAISentinel:
         return re.search(pattern, haystack) is not None
 
     def monitor_network(self, url, headers=None):
-        """
-        Aggressively monitor all network requests, fingerprinting and tracker events.
-        Blocks all future requests instantly on critical.
-        """
+
         if not self.enabled or not url:
             return
+
         if self.panic_mode_active:
             print("🚨 [MiniAI] PANIC MODE: All requests blocked:", str(url)[:80])
             return
+
+        # AUTO-RELEASE LOCKDOWN AFTER 5 MINUTES
         if self.lockdown_active:
-            print("[MiniAI] LOCKDOWN: Absolute block:", str(url)[:80])
-            return
+            if time.time() - self.lockdown_triggered_at > 300:
+                print("[MiniAI] Lockdown auto-released")
+                self.lockdown_active = False
+                self.lockdown_triggered_at = None
+            else:
+                print("[MiniAI] LOCKDOWN: Absolute block:", str(url)[:80])
+                return
 
         now = time.time()
 
@@ -1280,12 +1286,11 @@ class DarkelfMiniAISentinel:
         if last1s > self.anomaly_threshold and not trusted_domain and not is_static_asset:
             event['threats'].append("ANOMALY:burst")
             if event['risk_level'] in ("low", "medium"):
-                event['risk_level'] = 'high'
+                event['risk_level'] = "high"
 
-        # Flood detection (true attack behavior)
-        if last1s > 120 and not trusted_domain and not is_static_asset:
+        if last1s > self.flood_threshold and not trusted_domain and not is_static_asset:
             event['threats'].append("ANOMALY:REQUEST_FLOOD")
-            event['risk_level'] = 'critical'
+            event['risk_level'] = "critical"
             critical = True
             
         # Rapid redirect loop detection (unchanged)
