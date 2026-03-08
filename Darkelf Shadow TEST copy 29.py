@@ -8,7 +8,7 @@ import random
 import gc
 from PySide6.QtCore import Qt, QUrl, QUrlQuery, QSize, QPointF, QRectF, QTimer
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QLineEdit, QToolBar, QPushButton, QLabel, QWidget,
+    QApplication, QMainWindow, QLineEdit, QToolBar, QPushButton, QLabel, QWidget, QDialog,
     QTabWidget, QTabBar, QMessageBox, QToolButton, QProgressBar, QMenu, QWidgetAction, QGridLayout,
     QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QProgressDialog
 )
@@ -43,8 +43,8 @@ except:
 import urllib.request
 from urllib.error import URLError, HTTPError
     
-#devnull = open(os.devnull, 'w')
-#os.dup2(devnull.fileno(), sys.stderr.fileno())
+devnull = open(os.devnull, 'w')
+os.dup2(devnull.fileno(), sys.stderr.fileno())
 
 # ===================== Secure No-Trace Downloads helpers =====================
 
@@ -758,6 +758,7 @@ class EasyListEngine:
         return "\n".join(lines)
         
 class StealthInterceptor(QWebEngineUrlRequestInterceptor):
+
     def __init__(self, engine: EasyListEngine, mini_ai):
         super().__init__()
         self.engine = engine
@@ -765,13 +766,32 @@ class StealthInterceptor(QWebEngineUrlRequestInterceptor):
         self.hsts_hosts = set()  # remember HTTPS-capable hosts
 
     def interceptRequest(self, info):
+
         qurl = info.requestUrl()
-        scheme = (qurl.scheme() or "").lower()
-        host = (qurl.host() or "").lower()
-        
         req_url = qurl.toString()
 
-        # send request to MiniAI
+        scheme = (qurl.scheme() or "").lower()
+        host = (qurl.host() or "").lower()
+
+        # --------------------------------------------------
+        # MiniAI Panic Mode - Total Network Shutdown
+        # --------------------------------------------------
+        if self.mini_ai and getattr(self.mini_ai, "panic_mode_active", False):
+            print("🚨 PANIC MODE: Blocking request:", req_url[:120])
+            info.block(True)
+            return
+
+        # --------------------------------------------------
+        # MiniAI Lockdown Mode - Block external requests
+        # --------------------------------------------------
+        if self.mini_ai and getattr(self.mini_ai, "lockdown_active", False):
+            print("🔴 LOCKDOWN MODE: Request blocked:", req_url[:120])
+            info.block(True)
+            return
+
+        # --------------------------------------------------
+        # Send request to MiniAI for monitoring
+        # --------------------------------------------------
         if self.mini_ai:
             try:
                 self.mini_ai.monitor_network(req_url)
@@ -779,16 +799,13 @@ class StealthInterceptor(QWebEngineUrlRequestInterceptor):
                 print("MiniAI error:", e)
 
         # --------------------------------------------------
-        # 0️⃣ Skip safe/internal schemes
+        # Skip safe/internal schemes
         # --------------------------------------------------
         if scheme in ("data", "about", "chrome", "qrc", "blob", "view-source"):
             return
 
         if scheme == "file":
             info.block(True)
-            return
-
-        if "browserleaks.com" in host:
             return
 
         # --------------------------------------------------
@@ -950,6 +967,12 @@ class DarkelfMiniAISentinel:
         self.lockdown_active = False
         self.lockdown_threshold = 1  # 1 critical event triggers lockdown
         self.lockdown_triggered_at = None
+        
+        # --- Panic Mode ---
+        self.panic_mode_active = False
+        self.panic_threshold = 3  # number of critical events within window
+        self.panic_triggered_at = None
+        self.critical_events = deque(maxlen=20)
 
         # --- Enhancements to reduce false positives ---
         # Only treat these as "tools" when they appear as separate tokens in path/query/fragment
@@ -1050,6 +1073,9 @@ class DarkelfMiniAISentinel:
         Blocks all future requests instantly on critical.
         """
         if not self.enabled or not url:
+            return
+        if self.panic_mode_active:
+            print("🚨 [MiniAI] PANIC MODE: All requests blocked:", str(url)[:80])
             return
         if self.lockdown_active:
             print("[MiniAI] LOCKDOWN: Absolute block:", str(url)[:80])
@@ -1210,12 +1236,21 @@ class DarkelfMiniAISentinel:
         # 5) Lockdown trigger (keep behavior intact; still immediate on critical)
         # -------------------------
         if event['risk_level'] == 'critical':
-            print("\n🔴 [MiniAI] CRITICAL: Lockdown triggered immediately!")
+
+            self.critical_events.append(now)
+
+            print("\n🔴 [MiniAI] CRITICAL threat detected!")
+
             self.lockdown_active = True
             self.lockdown_triggered_at = now
+
+            # Count critical events inside window
+            recent = [t for t in self.critical_events if (now - t) < self.CRITICAL_WINDOW_SECONDS]
+
+            if len(recent) >= self.panic_threshold:
+                self.trigger_panic_mode("Multiple critical intrusion events")
+
             print("🛑 Event:", event)
-        elif event['risk_level'] in ("high", "medium"):
-            print("🟠 [MiniAI] Threat:", event['url'][:80], event['threats'])
 
     def on_http_blocked(self, url):
         self.http_blocks_attempts += 1
@@ -1254,7 +1289,11 @@ class DarkelfMiniAISentinel:
             'recent_threats': [
                 e for e in list(self.events)[-10:]
                 if e['risk_level'] in ('high', 'critical')
-            ]
+            ],
+            'panic': {
+                'active': self.panic_mode_active,
+                'triggered_at': self.panic_triggered_at,
+            }
         }
 
     def get_threat_report(self):
@@ -1262,7 +1301,12 @@ class DarkelfMiniAISentinel:
         uptime_min = stats['uptime_seconds'] / 60
         total_threats = (
             stats['threats']['trackers'] + stats['threats']['fingerprinting'])
-        lockdown_status = "🔴 ACTIVE" if stats['lockdown']['active'] else "🟢 STANDBY"
+        if self.panic_mode_active:
+            lockdown_status = "🚨 PANIC"
+        elif stats['lockdown']['active']:
+            lockdown_status = "🔴 LOCKDOWN"
+        else:
+            lockdown_status = "🟢 STANDBY"
         domain_stats = {}
         for event in self.events:
             dom = urlparse(event['url']).netloc or 'unknown'
@@ -1332,10 +1376,13 @@ TOP 10 THREAT DOMAINS:
         for event in stats['recent_threats'][-5:]:
             report += f"\n  • {event['datetime']} | {event['risk_level'].upper()} | {', '.join(event['threats'][:2])}"
         report += "\n" + "="*62
-        if stats['lockdown']['active']:
-            report += f"\n  🔴 LOCKDOWN ACTIVE - All requests blocked"
+        if self.panic_mode_active:
+            report += "\n  🚨 PANIC MODE ACTIVE - Browser compromised state"
+        elif stats['lockdown']['active']:
+            report += "\n  🔴 LOCKDOWN ACTIVE - All requests blocked"
         else:
             report += "\n  ✅ No fingerprint leaks. All tracker attempts defended."
+
         report += "\n" + "="*62
         return report
 
@@ -1351,6 +1398,39 @@ TOP 10 THREAT DOMAINS:
         self.events.clear()
         print("[MiniAI] 🟢 Lockdown reset - System restored")
         return True
+        
+    def trigger_panic_mode(self, reason="unknown"):
+        if self.panic_mode_active:
+            return
+
+        self.panic_mode_active = True
+        self.lockdown_active = True
+        self.panic_triggered_at = time.time()
+
+        print("\n🚨🚨🚨 DARKELF PANIC MODE ACTIVATED 🚨🚨🚨")
+        print("Reason:", reason)
+        print("All browser network activity halted.")
+        print("User intervention required.\n")
+
+        # Future integrations
+        # close tabs
+        # disable JS
+        # clear cookies
+        # isolate profile
+        
+    def reset_panic(self, admin_override=False):
+        if not admin_override:
+            print("[MiniAI] Panic reset requires admin_override=True")
+            return False
+
+        self.panic_mode_active = False
+        self.lockdown_active = False
+        self.panic_triggered_at = None
+        self.lockdown_triggered_at = None
+        self.critical_events.clear()
+
+        print("[MiniAI] 🟢 Panic mode cleared - system restored")
+        return True
 
     def shutdown(self):
         if not self.enabled: return
@@ -1359,6 +1439,7 @@ TOP 10 THREAT DOMAINS:
             print(self.get_threat_report())
         except Exception as e:
             print("[MiniAI] Report failed:", e)
+            
 # --- Custom Icon helpers (ported from fixed2) ---
 def make_icon(color=None, size=24):
 
@@ -1532,6 +1613,37 @@ def make_java_icon(color: str, size: int = 48) -> QIcon:
     p.drawArc(QRectF(int(handle_rect.x()), int(handle_rect.y()), int(handle_rect.width()), int(handle_rect.height())), int(16*40), int(16*175))
     p.end()
     return QIcon(pm)
+    
+def make_shield_icon(color, size=18):
+
+    pix = QPixmap(size, size)
+    pix.fill(Qt.transparent)
+
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.Antialiasing)
+
+    painter.setBrush(QColor(color))
+    painter.setPen(Qt.NoPen)
+
+    path = QPainterPath()
+
+    w = size
+    h = size
+
+    path.moveTo(w * 0.5, h * 0.05)
+    path.lineTo(w * 0.1, h * 0.25)
+    path.lineTo(w * 0.1, h * 0.55)
+
+    path.cubicTo(w * 0.1, h * 0.75, w * 0.3, h * 0.9, w * 0.5, h * 0.95)
+    path.cubicTo(w * 0.7, h * 0.9, w * 0.9, h * 0.75, w * 0.9, h * 0.55)
+
+    path.lineTo(w * 0.9, h * 0.25)
+    path.closeSubpath()
+
+    painter.drawPath(path)
+    painter.end()
+
+    return QIcon(pix)
 
 def make_nuke_icon(hex_color: str, size: int) -> QIcon:
     pm = QPixmap(size, size)
@@ -1821,7 +1933,7 @@ width:100%;
   </div>
 
   <div class="ai-status">
-    Darkelf MiniAI
+    Darkelf MiniAI Sentinel
   </div>
 </body>
 </html>
@@ -3198,7 +3310,24 @@ class DarkelfBrowser(QMainWindow):
 
         except Exception as e:
             print("[Darkelf] Cleanup error:", e)
-            
+                    
+    def update_miniai_icon(self):
+
+        if self.mini_ai.panic_mode_active:
+            color = "#ff0033"
+
+        elif self.mini_ai.lockdown_active:
+            color = "#ff8800"
+
+        else:
+            color = self.accent_color
+
+        self.miniai_button.setIcon(create_shield_icon(color))
+        
+        self.miniai_timer = QTimer()
+        self.miniai_timer.timeout.connect(self.update_miniai_icon)
+        self.miniai_timer.start(1500)
+
     def make_outline_lock_icon(self, color="#ffffff", size=16):
         pix = QPixmap(size, size)
         pix.fill(Qt.transparent)
@@ -3237,6 +3366,13 @@ class DarkelfBrowser(QMainWindow):
 
 
         self.java_action = QAction(make_java_icon(self.accent_color, 18), "JavaScript", self)
+        self.miniai_action = QAction(
+            make_shield_icon(self.accent_color, 18),
+            "MiniAI Monitor",
+            self
+            )
+        self.miniai_action.triggered.connect(self.show_miniai_status)
+
         self.nuke_action = QAction(make_nuke_icon("#ff2a2a", 18), "Nuke", self)
 
         self.addtab_action = QAction(make_icon(c, 20), "New Tab", self)
@@ -3325,6 +3461,8 @@ class DarkelfBrowser(QMainWindow):
         self.java_action.setToolTip("Enable/Disable JavaScript globally")
         tb.addAction(self.java_action)
         
+        tb.addAction(self.miniai_action)
+
         tb.addAction(self.nuke_action)
         
         def update_js_icon():
@@ -3337,7 +3475,273 @@ class DarkelfBrowser(QMainWindow):
 
         tb.addSeparator()
         return tb
-                
+        
+    def show_miniai_status(self):
+
+        html = self._build_threat_report_html()
+
+        win = QDialog(self)
+        win.setWindowTitle("Darkelf MiniAI Threat Console")
+        win.resize(900,600)
+
+        layout = QVBoxLayout(win)
+
+        view = QWebEngineView()
+        view.setHtml(html)
+
+        layout.addWidget(view)
+
+        win.exec_()
+
+    def _build_threat_report_html(self):
+
+        stats = self.mini_ai.get_statistics()
+
+        return f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+
+    <meta http-equiv="Content-Security-Policy"
+    content="
+    default-src 'none';
+    style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;
+    font-src https://cdn.jsdelivr.net;
+    img-src 'self' data:;
+    connect-src 'none';
+    script-src 'none';
+    object-src 'none';
+    frame-ancestors 'none';
+    base-uri 'none';
+    form-action 'none';
+    ">
+
+    <title>Darkelf Threat Console</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+
+    <style>
+
+    :root {{
+    --bg:#05060a;
+    --accent:#36ff9a;
+    --accent2:#00eaff;
+    --accent3:#b400ff;
+    --danger:#ff3b30;
+    --warn:#ffd36b;
+    --muted:#9db0be;
+    --card:rgba(255,255,255,.05);
+    }}
+
+    *{{box-sizing:border-box}}
+    html,body{{margin:0;height:100%;font-family:ui-sans-serif,system-ui,-apple-system;}}
+
+    body{{
+    background:
+    radial-gradient(1200px 800px at 15% -10%, rgba(0,234,255,.35), transparent 70%),
+    radial-gradient(900px 600px at 110% 0%, rgba(54,255,154,.35), transparent 70%),
+    radial-gradient(1200px 700px at 50% 120%, rgba(180,0,255,.35), transparent 70%),
+    var(--bg);
+    color:#eef2f6;
+    }}
+
+    body::before {{
+    content:"";
+    position:fixed;
+    inset:0;
+    background:
+    linear-gradient(rgba(0,255,180,.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,255,180,.05) 1px, transparent 1px);
+    background-size:40px 40px;
+    pointer-events:none;
+    opacity:.3;
+    }}
+
+    .scanline {{
+    position:fixed;
+    top:0;
+    left:0;
+    width:100%;
+    height:2px;
+    background:linear-gradient(90deg,transparent,var(--accent2),transparent);
+    animation:scan 5s linear infinite;
+    opacity:.5;
+    }}
+
+    @keyframes scan {{
+    0%{{transform:translateY(-20px)}}
+    100%{{transform:translateY(100vh)}}
+    }}
+
+    .container {{
+    max-width:1100px;
+    margin:auto;
+    padding:90px 24px;
+    }}
+
+    .title {{
+    font-size:1.8rem;
+    font-weight:900;
+    letter-spacing:.15em;
+    background:linear-gradient(90deg,var(--accent),var(--accent2),var(--accent3));
+    -webkit-background-clip:text;
+    -webkit-text-fill-color:transparent;
+    }}
+
+    .status-lights {{
+    margin-top:18px;
+    display:flex;
+    gap:10px;
+    }}
+
+    .light {{
+    width:10px;
+    height:10px;
+    border-radius:50%;
+    }}
+
+    .green {{background:#36ff9a;box-shadow:0 0 10px #36ff9a}}
+    .cyan {{background:#00eaff;box-shadow:0 0 10px #00eaff}}
+    .purple {{background:#b400ff;box-shadow:0 0 10px #b400ff}}
+
+    .badge {{
+    display:inline-flex;
+    align-items:center;
+    gap:10px;
+    margin-top:20px;
+    padding:8px 16px;
+    border-radius:999px;
+    font-size:.7rem;
+    font-weight:800;
+    letter-spacing:.15em;
+    background:{"#ff3b30" if stats['lockdown']['active'] else "#36ff9a"};
+    color:#000;
+    }}
+
+    .badge::before {{
+    content:"";
+    width:8px;
+    height:8px;
+    border-radius:50%;
+    background:#fff;
+    animation:pulse 1.5s infinite;
+    }}
+
+    @keyframes pulse {{
+    0%{{transform:scale(.7);opacity:.6}}
+    50%{{transform:scale(1.4);opacity:1}}
+    100%{{transform:scale(.7);opacity:.6}}
+    }}
+
+    .cards {{
+    margin-top:60px;
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:50px;
+    }}
+
+    .card {{
+    background:var(--card);
+    backdrop-filter:blur(20px);
+    padding:40px;
+    border-radius:18px;
+    border:1px solid rgba(255,255,255,.08);
+    box-shadow:0 30px 60px rgba(0,0,0,.6),0 0 40px rgba(0,234,255,.15);
+    }}
+
+    .section-title {{
+    font-size:.75rem;
+    letter-spacing:.25em;
+    text-transform:uppercase;
+    color:var(--muted);
+    margin-bottom:24px;
+    }}
+
+    .line {{
+    display:grid;
+    grid-template-columns:28px auto max-content;
+    align-items:center;
+    column-gap:14px;
+    margin:16px 0;
+    }}
+
+    .icon {{
+    font-size:1.2rem;
+    color:var(--accent2);
+    }}
+
+    .stat-label {{color:#c3d2dd}}
+
+    .stat-value {{
+    font-weight:900;
+    font-size:1.15rem;
+    }}
+
+    .footer {{
+    margin-top:80px;
+    text-align:center;
+    font-size:.8rem;
+    color:var(--muted);
+    opacity:.7;
+    }}
+
+    </style>
+    </head>
+
+    <body>
+
+    <div class="scanline"></div>
+    
+    <div class="container">
+
+    <div class="title">Darkelf MiniAI Threat Console</div>
+
+    <div class="status-lights">
+    <div class="light green"></div>
+    <div class="light cyan"></div>
+    <div class="light purple"></div>
+    </div>
+
+    <div class="badge">
+    {"LOCKDOWN ACTIVE" if stats['lockdown']['active'] else "SYSTEM MONITORING"}
+    </div>
+
+    <div class="cards">
+
+    <div class="card">
+    <div class="section-title">Session Metrics</div>
+
+    <div class="line"><i class="bi bi-clock-history icon"></i><span class="stat-label">Session Uptime</span><span class="stat-value">{stats['uptime_seconds']:.1f}s</span></div>
+    <div class="line"><i class="bi bi-activity icon"></i><span class="stat-label">Total Events</span><span class="stat-value">{stats['total_events']}</span></div>
+    <div class="line"><i class="bi bi-globe2 icon"></i><span class="stat-label">Unique Domains</span><span class="stat-value">{stats['unique_domains']}</span></div>
+
+    </div>
+
+    <div class="card">
+    <div class="section-title">Threat Analysis</div>
+
+    <div class="line"><i class="bi bi-crosshair icon"></i><span class="stat-label">Trackers</span><span class="stat-value">{stats['threats']['trackers']}</span></div>
+    <div class="line"><i class="bi bi-bullseye icon"></i><span class="stat-label">Intrusions</span><span class="stat-value">{stats['threats']['intrusions']}</span></div>
+    <div class="line"><i class="bi bi-bug-fill icon"></i><span class="stat-label">Malware</span><span class="stat-value">{stats['threats']['malware']}</span></div>
+    <div class="line"><i class="bi bi-lightning-charge-fill icon"></i><span class="stat-label">Exploits</span><span class="stat-value">{stats['threats']['exploits']}</span></div>
+    <div class="line"><i class="bi bi-fingerprint icon"></i><span class="stat-label">Fingerprinting</span><span class="stat-value">{stats['threats']['fingerprinting']}</span></div>
+    <div class="line"><i class="bi bi-arrow-left-right icon"></i><span class="stat-label">HTTP Blocks</span><span class="stat-value">{stats['threats']['http_blocks']}</span></div>
+
+    </div>
+
+    </div>
+
+    <div class="footer">
+    Darkelf Browser • MiniAI Sentinel • Hardened Runtime
+    </div>
+
+    </div>
+    </body>
+    </html>
+    """
+
     def set_accent_color(self, color):
 
         self.accent_color = color.name()
@@ -3362,6 +3766,7 @@ class DarkelfBrowser(QMainWindow):
         self.full_action.setIcon(make_fullscreen_icon(c, 20))
         self.addtab_action.setIcon(make_icon(c, 20))
         self.java_action.setIcon(make_java_icon(c, 18))
+        self.miniai_action.setIcon(make_shield_icon(c, 18))
         
         self.addr.setStyleSheet(f"""
         QLineEdit {{
@@ -3621,6 +4026,7 @@ class DarkelfBrowser(QMainWindow):
         if home:
             html = HOMEPAGE.replace("ACCENT_COLOR", self.accent_color)
             view.setHtml(html)
+            view._is_homepage = True
 
         elif url and url.startswith("view-source:"):
             real_url = url.replace("view-source:", "")
@@ -3629,7 +4035,18 @@ class DarkelfBrowser(QMainWindow):
 
         else:
             view.load(QUrl(url or "https://duckduckgo.com/lite/"))
-        
+            
+            # ---- Accent Color Injection ----
+        def apply_accent(v):
+            js = f"""
+            try {{
+                document.documentElement.style.setProperty('--accent', '{self.accent_color}');
+            }} catch(e) {{}}
+            """
+            v.page().runJavaScript(js)
+
+        view.loadFinished.connect(lambda ok, v=view: apply_accent(v) if ok else None)
+
     def _show_source_tab(self, html):
         view = QWebEngineView(self)
         view.setHtml(f"<pre style='white-space:pre-wrap;font-family:monospace'>{html.replace('<','&lt;')}</pre>")
