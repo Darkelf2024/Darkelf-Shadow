@@ -967,6 +967,8 @@ class DarkelfMiniAISentinel:
         self.lockdown_active = False
         self.lockdown_threshold = 1  # 1 critical event triggers lockdown
         self.lockdown_triggered_at = None
+        self.tracker_window = deque(maxlen=50)
+        self.domain_risk_cache = {}
         
         # --- Panic Mode ---
         self.panic_mode_active = False
@@ -1004,13 +1006,31 @@ class DarkelfMiniAISentinel:
             'outbrain.com', 'criteo.com', 'adnxs.com',
         ]
         self.high_risk_tlds = {'.tk', '.ml', '.ga', '.cf', '.gq'}
+        
+        # Trusted high-traffic infrastructure (prevents false positives)
+        self.trusted_cdn_domains = {
+            "youtube.com",
+            "ytimg.com",
+            "googlevideo.com",
+            "gstatic.com",
+            "fonts.gstatic.com",
+            "googleusercontent.com",
+            "cloudflare.com",
+            "cdnjs.cloudflare.com"
+        }
 
         self.fingerprint_apis = {
             'canvas': 0, 'webgl': 0, 'audio': 0, 'font': 0, 'battery': 0,
             'geolocation': 0, 'media_devices': 0, 'webrtc': 0,
         }
         self.request_timestamps = deque(maxlen=100)
-        self.anomaly_threshold = 50  # Aggressive!
+        self.anomaly_threshold = 100  # Aggressive!
+        
+        # Static assets that should not trigger anomaly detection
+        self.static_extensions = (
+            ".svg",".png",".jpg",".jpeg",".webp",".gif",
+            ".woff",".woff2",".ttf",".css",".ico"
+        )
 
         print("[MiniAI] Aggressive & Expanded Sentinel ready (threshold=1)")
 
@@ -1102,6 +1122,28 @@ class DarkelfMiniAISentinel:
 
         critical = False
 
+        # --- Domain Risk Cache ---
+        if domain:
+            if domain in self.domain_risk_cache:
+                cached = self.domain_risk_cache[domain]
+
+                # Apply cached risk level
+                event['threats'].append("DOMAIN_CACHE")
+                event['risk_level'] = min(
+                    event['risk_level'],
+                    cached.get('risk', 'low'),
+                    key=lambda r: ["low","medium","high","critical"].index(r)
+                )
+
+                # Track how many times we've seen it
+                cached['seen'] += 1
+
+            else:
+                # First time seeing this domain
+                self.domain_risk_cache[domain] = {
+                    "risk": event['risk_level'],
+                    "seen": 1
+                }
         # -------------------------
         # 1) Intrusion pattern detection (reduced false positives)
         # -------------------------
@@ -1199,6 +1241,13 @@ class DarkelfMiniAISentinel:
         # Trackers: keep broad detection, but avoid counting "clearurls" as domain risk; it's a keyword only.
         if any(x in url_norm_l for x in ("tracker", "analytics", "beacon", "doubleclick", "facebook.net", "clearurls", "adguard")):
             self.tracker_hits += 1
+            self.tracker_window.append(now)
+
+            tracker_burst = sum(1 for t in self.tracker_window if (now - t) < 2)
+
+            if tracker_burst > 25:
+                event['threats'].append("TRACKER_STORM")
+                event['risk_level'] = 'high'
             event['threats'].append("TRACKER")
             if event['risk_level'] == 'low':
                 event['risk_level'] = 'medium'
@@ -1218,12 +1267,27 @@ class DarkelfMiniAISentinel:
         # 4) Anomaly detection windows (bugfix + keep aggressive intent)
         # -------------------------
         self.request_timestamps.append(now)
+
         last1s = sum(1 for t in self.request_timestamps if (now - t) < 1.0)
-        if last1s > self.anomaly_threshold:
+
+        trusted_domain = any(
+            self._domain_matches(domain, d) for d in self.trusted_cdn_domains
+        )
+
+        is_static_asset = any(path.endswith(ext) for ext in self.static_extensions)
+
+        # Burst detection
+        if last1s > self.anomaly_threshold and not trusted_domain and not is_static_asset:
             event['threats'].append("ANOMALY:burst")
             if event['risk_level'] in ("low", "medium"):
                 event['risk_level'] = 'high'
 
+        # Flood detection (true attack behavior)
+        if last1s > 120 and not trusted_domain and not is_static_asset:
+            event['threats'].append("ANOMALY:REQUEST_FLOOD")
+            event['risk_level'] = 'critical'
+            critical = True
+            
         # Rapid redirect loop detection (unchanged)
         if len(self.redirects) > 7:
             event['threats'].append("ANOMALY:redirect_loop")
@@ -1235,7 +1299,14 @@ class DarkelfMiniAISentinel:
         # -------------------------
         # 5) Lockdown trigger (keep behavior intact; still immediate on critical)
         # -------------------------
-        if event['risk_level'] == 'critical':
+        real_attack = any(t.startswith((
+            "INTRUSION",
+            "MALWARE",
+            "EXPLOIT",
+            "TOOL"
+        )) for t in event['threats'])
+
+        if event['risk_level'] == 'critical' and real_attack:
 
             self.critical_events.append(now)
 
@@ -1253,29 +1324,54 @@ class DarkelfMiniAISentinel:
             print("🛑 Event:", event)
 
     def on_http_blocked(self, url):
+
+        https_url = url.replace("http://", "https://", 1)
+
         self.http_blocks_attempts += 1
+
         event = {
             'url': url,
             'timestamp': time.time(),
             'datetime': time.strftime("%Y-%m-%d %H:%M:%S"),
             'threats': ['HTTP_AUTO_UPGRADE'],
-            'risk_level': 'medium'
+            'risk_level': 'medium',
+            'upgrade_to': https_url
         }
+
         self.events.append(event)
-        print("[MiniAI] 🔒 HTTP blocked:", str(url)[:60])
+
+        print(f"[MiniAI] 🔒 HTTP upgraded: {url[:60]} → {https_url[:60]}")
 
     # Expanded statistics/report as passive mode
     def get_statistics(self):
+
         uptime = time.time() - self.session_start
+
+        # ---- Threat Score Calculation ----
+        threat_score = (
+            self.tracker_hits * 1 +
+            self.suspicious_hits * 1 +
+            self.fingerprint_attempts * 2 +
+            self.intrusion_attempts * 4 +
+            self.malware_hits * 6 +
+            self.exploit_attempts * 6 +
+            self.http_blocks_attempts * 1
+        )
+
         return {
             'uptime_seconds': uptime,
             'total_events': len(self.events),
             'unique_domains': len(self.unique_domains),
+
+            # NEW
+            'threat_score': threat_score,
+
             'lockdown': {
                 'active': self.lockdown_active,
                 'threshold': self.lockdown_threshold,
                 'triggered_at': self.lockdown_triggered_at,
             },
+
             'threats': {
                 'trackers': self.tracker_hits,
                 'suspicious': self.suspicious_hits,
@@ -1285,11 +1381,14 @@ class DarkelfMiniAISentinel:
                 'fingerprinting': self.fingerprint_attempts,
                 'http_blocks': self.http_blocks_attempts,
             },
+
             'fingerprinting_apis': dict(self.fingerprint_apis),
+
             'recent_threats': [
                 e for e in list(self.events)[-10:]
                 if e['risk_level'] in ('high', 'critical')
             ],
+
             'panic': {
                 'active': self.panic_mode_active,
                 'triggered_at': self.panic_triggered_at,
@@ -1317,7 +1416,7 @@ class DarkelfMiniAISentinel:
                 elif 'FINGERPRINT' in threat: domain_stats[dom]['fingerprinting'] += 1
                 elif 'MALWARE' in threat or 'EXPLOIT' in threat: domain_stats[dom]['malware'] += 1
                 elif 'INTRUSION' in threat or 'TOOL' in threat: domain_stats[dom]['intrusions'] += 1
-                elif 'HTTP_INSECURE' in threat: domain_stats[dom]['http_blocks'] += 1
+                elif 'HTTP_AUTO_UPGRADE' in threat: domain_stats[dom]['http_blocks'] += 1
             if event['risk_level'] == 'critical':
                 domain_stats[dom]['risk_level'] = 'critical'
             elif event['risk_level'] == 'high' and domain_stats[dom]['risk_level'] != 'critical':
@@ -3496,6 +3595,11 @@ class DarkelfBrowser(QMainWindow):
     def _build_threat_report_html(self):
 
         stats = self.mini_ai.get_statistics()
+        
+        recent_upgrades = [
+            e for e in self.mini_ai.events
+            if "HTTP_AUTO_UPGRADE" in e.get("threats", [])
+        ][-5:]
 
         return f"""
     <!DOCTYPE html>
@@ -3716,6 +3820,12 @@ class DarkelfBrowser(QMainWindow):
     <div class="line"><i class="bi bi-clock-history icon"></i><span class="stat-label">Session Uptime</span><span class="stat-value">{stats['uptime_seconds']:.1f}s</span></div>
     <div class="line"><i class="bi bi-activity icon"></i><span class="stat-label">Total Events</span><span class="stat-value">{stats['total_events']}</span></div>
     <div class="line"><i class="bi bi-globe2 icon"></i><span class="stat-label">Unique Domains</span><span class="stat-value">{stats['unique_domains']}</span></div>
+
+    <div class="line">
+    <i class="bi bi-shield-exclamation icon"></i>
+    <span class="stat-label">Threat Score</span>
+    <span class="stat-value">{stats['threat_score']}</span>
+    </div>
 
     </div>
 
