@@ -46,6 +46,116 @@ from urllib.error import URLError, HTTPError
 #devnull = open(os.devnull, 'w')
 #os.dup2(devnull.fileno(), sys.stderr.fileno())
 
+JS_YOUTUBE_AD_NEUTRALIZER = r"""
+(function() {
+
+    // --------------------------------------------------
+    // Only run on real YouTube pages
+    // --------------------------------------------------
+    const host = location.hostname;
+
+    if (!(host === "www.youtube.com" ||
+          host === "youtube.com" ||
+          host.endsWith(".youtube.com") ||
+          host === "youtu.be")) {
+        return;
+    }
+
+    // --------------------------------------------------
+    // Remove ad structures safely
+    // --------------------------------------------------
+    function clean(obj) {
+
+        if (!obj || typeof obj !== "object")
+            return obj;
+
+        try {
+
+            if (obj.playerAds)
+                delete obj.playerAds;
+
+            if (obj.adPlacements)
+                obj.adPlacements = [];
+
+            if (obj.adSlots)
+                obj.adSlots = [];
+
+            if (obj.adBreakHeartbeatParams)
+                delete obj.adBreakHeartbeatParams;
+
+        } catch(e) {}
+
+        return obj;
+    }
+
+    // --------------------------------------------------
+    // Hook player response
+    // --------------------------------------------------
+    try {
+
+        let valueStore;
+
+        Object.defineProperty(window, "ytInitialPlayerResponse", {
+
+            configurable: true,
+
+            get() {
+                return valueStore;
+            },
+
+            set(v) {
+                valueStore = clean(v);
+            }
+
+        });
+
+    } catch(e) {}
+
+    // --------------------------------------------------
+    // Hook initial data as well
+    // --------------------------------------------------
+    try {
+
+        let dataStore;
+
+        Object.defineProperty(window, "ytInitialData", {
+
+            configurable: true,
+
+            get() {
+                return dataStore;
+            },
+
+            set(v) {
+                dataStore = clean(v);
+            }
+
+        });
+
+    } catch(e) {}
+
+})();
+"""
+
+from PySide6.QtWebEngineCore import QWebEngineScript
+
+def install_darkelf_youtube_adblock(profile):
+
+    script = QWebEngineScript()
+
+    script.setName("darkelf_youtube_ad_neutralizer")
+
+    script.setInjectionPoint(QWebEngineScript.DocumentCreation)
+
+    script.setWorldId(QWebEngineScript.MainWorld)
+
+    script.setRunsOnSubFrames(False)
+
+    script.setSourceCode(JS_YOUTUBE_AD_NEUTRALIZER)
+
+    profile.scripts().insert(script)
+
+
 # ===================== Secure No-Trace Downloads helpers =====================
 
 def _safe_download_dir() -> str:
@@ -312,11 +422,13 @@ def _third_party_check(req_host: str, first_party_host: str) -> bool:
 # ===================== Filter structures =====================
 
 class _NetRule:
-    __slots__ = ("re", "is_exception", "opts")
-    def __init__(self, pattern: re.Pattern, is_exception: bool, opts: dict):
+    __slots__ = ("re", "is_exception", "opts", "hint")
+
+    def __init__(self, pattern: re.Pattern, is_exception: bool, opts: dict, hint: str | None):
         self.re = pattern
         self.is_exception = is_exception
         self.opts = opts
+        self.hint = hint
 
 class EasyListEngine:
     """
@@ -437,20 +549,23 @@ class EasyListEngine:
 
     def _parse_network(self, line: str):
         is_exception = False
+
         if line.startswith("@@"):
             is_exception = True
             line = line[2:].strip()
 
         rule, opts = _split_rule_and_options(line)
 
-        # Skip unsupported rule types (resource redirects, etc.)
-        # Keep only rules that look like URL filters.
         if not rule:
             return
 
-        # Convert ABP -> regex
         rx = _abp_rule_to_regex(rule)
+
         if not rx:
+            return
+
+        # Prevent pathological regex rules
+        if len(rx) > 400:
             return
 
         try:
@@ -458,7 +573,15 @@ class EasyListEngine:
         except re.error:
             return
 
-        self.network_rules.append(_NetRule(cre, is_exception, opts))
+        # Extract simple domain hint for faster matching
+        hint = None
+        if "||" in rule:
+            try:
+                hint = rule.split("||", 1)[1].split("^")[0].split("/")[0].lower()
+            except Exception:
+                hint = None
+
+        self.network_rules.append(_NetRule(cre, is_exception, opts, hint))
 
     def _finalize(self):
         # Put exceptions first for fast allow-pass.
@@ -476,17 +599,21 @@ class EasyListEngine:
             self.cosmetic[d] = out
             
     def should_block(self, url: str, first_party_url: str, req_type: str | None = None) -> bool:
+
         u = (url or "").lower()
         fp_host = _safe_host(first_party_url)
         req_host = _safe_host(url)
 
         if not req_host:
             return False
-            
-        # Never block BrowserLeaks (testing site)
-        if "browserleaks.com" in fp_host:
-            print("BROWSERLEAKS ALLOW:", req_type, url)
+
+        if any(x in fp_host for x in (
+            "walmart.com",
+            "amazon.",
+            "target.com",
+        )):
             return False
+
 
         if req_type is None:
             return False
@@ -494,9 +621,12 @@ class EasyListEngine:
         if req_type == "document":
             return False
 
-        # -----------------------------
-        # SAME-SITE detection
-        # -----------------------------
+        if req_type in ("image", "stylesheet", "font"):
+            return False
+
+        # -------------------------------------------------
+        # Same-site detection
+        # -------------------------------------------------
         def _site_key(host: str) -> str:
             parts = [p for p in (host or "").split(".") if p]
             if len(parts) >= 2:
@@ -505,12 +635,13 @@ class EasyListEngine:
 
         fp_site = _site_key(fp_host)
         req_site = _site_key(req_host)
-        same_site = (fp_site and req_site and fp_site == req_site)
 
+        same_site = (fp_site and req_site and fp_site == req_site)
         is_third_party = (not same_site) and _third_party_check(req_host, fp_host)
-        
+
+
         # -------------------------------------------------
-        # Treat Wikimedia family as same-site
+        # Wikimedia family
         # -------------------------------------------------
         WIKIMEDIA_FAMILY = (
             "wikipedia.org",
@@ -519,13 +650,14 @@ class EasyListEngine:
         )
 
         if any(fp_host.endswith(x) for x in WIKIMEDIA_FAMILY) and \
-        any(req_host.endswith(x) for x in WIKIMEDIA_FAMILY):
+           any(req_host.endswith(x) for x in WIKIMEDIA_FAMILY):
+
             same_site = True
             is_third_party = False
 
 
         # -------------------------------------------------
-        # Treat GitHub family as same-site
+        # GitHub family
         # -------------------------------------------------
         GITHUB_FAMILY = (
             "github.com",
@@ -534,45 +666,25 @@ class EasyListEngine:
         )
 
         if any(fp_host.endswith(x) for x in GITHUB_FAMILY) and \
-        any(req_host.endswith(x) for x in GITHUB_FAMILY):
+           any(req_host.endswith(x) for x in GITHUB_FAMILY):
+
             same_site = True
             is_third_party = False
 
-        # -----------------------------
-        # Never block critical same-site core resources
-        # -----------------------------
-        if same_site and req_type in ("script", "xmlhttprequest", "stylesheet", "font", "media"):
-            return False
 
-        # -----------------------------
-        # Never interfere with AWS WAF
-        # -----------------------------
+        # -------------------------------------------------
+        # AWS WAF protection
+        # -------------------------------------------------
         if "awswaf.com" in req_host or "token.awswaf.com" in req_host:
             return False
+            
+        # -------------------------------------------------
+        # Amazon allowlist (prevent site breakage)
+        # -------------------------------------------------
+        if "amazon." in fp_host:
 
-        # -----------------------------
-        # YouTube ad blocking
-        # -----------------------------
-        if "youtube.com" in fp_host or "youtu.be" in fp_host:
-            YT_AD_ENDPOINTS = (
-                "youtube.com/pagead",
-                "youtube.com/api/stats/ads",
-                "youtube.com/get_midroll_info",
-                "youtube.com/ptracking",
-                "youtube.com/youtubei/v1/player/ad",
-            )
-            if any(ep in u for ep in YT_AD_ENDPOINTS):
-                return True
-
-            if "googlevideo.com" in req_host:
-                if any(k in u for k in ("ctier", "adformat", "midroll")):
-                    return True
-
-        # -----------------------------
-        # Amazon essential allowlist
-        # -----------------------------
-        if fp_site == "amazon.com":
-            AMAZON_ESSENTIAL = (
+            AMAZON_CORE = (
+                "amazon.com",
                 "media-amazon.com",
                 "ssl-images-amazon.com",
                 "images-amazon.com",
@@ -587,31 +699,19 @@ class EasyListEngine:
                 "a6.awsstatic.com",
                 "a7.awsstatic.com",
             )
-            if any(req_host == h or req_host.endswith("." + h) for h in AMAZON_ESSENTIAL):
+
+            if any(req_host == h or req_host.endswith("." + h) for h in AMAZON_CORE):
                 return False
 
-        # -----------------------------
-        # Infrastructure allowlist
-        # -----------------------------
-        INFRA_ALLOW = (
-            "amazonaws.com",
-            "cloudfront.net",
-            "awswaf.com",
-        )
-        if any(req_host == x or req_host.endswith("." + x) for x in INFRA_ALLOW):
-            return False
-
-        # -----------------------------
-        # Hard tracker domains
-        # -----------------------------
+        # -------------------------------------------------
+        # HARD TRACKER BLOCK
+        # -------------------------------------------------
         HARD_TRACKERS = (
             "doubleclick.net",
             "googlesyndication.com",
             "googleadservices.com",
-            "adservice.google.com",
             "googletagmanager.com",
             "google-analytics.com",
-            "analytics.google.com",
             "connect.facebook.net",
             "facebook.net",
             "adnxs.com",
@@ -621,13 +721,60 @@ class EasyListEngine:
             "scorecardresearch.com",
             "quantserve.com",
         )
-        if (not same_site) and any(req_host == t or req_host.endswith("." + t) for t in HARD_TRACKERS):
+
+        if any(req_host.endswith(x) for x in HARD_TRACKERS):
             return True
 
-        # -----------------------------
-        # Third-party ad-tech signals
-        # -----------------------------
-        if req_type in ("script", "xmlhttprequest", "subdocument") and (not same_site):
+
+        # -------------------------------------------------
+        # YouTube rules (custom-only; bypass generic filters)
+        # -------------------------------------------------
+        if "youtube.com" in fp_host or "youtu.be" in fp_host:
+
+            # Always allow YouTube static/media/image infrastructure
+            if req_host.endswith((
+                "youtube.com",
+                "youtube-nocookie.com",
+                "ytimg.com",
+                "ggpht.com",
+                "googleusercontent.com",
+            )):
+                # block only explicit ad endpoints on these hosts
+                YT_AD_ENDPOINTS = (
+                    "youtube.com/pagead/",
+                    "youtube.com/pagead/l",
+                    "youtube.com/api/stats/ads",
+                    "youtube.com/get_midroll_info",
+                    "youtube.com/youtubei/v1/player/ad",
+                )
+
+                if any(ep in u for ep in YT_AD_ENDPOINTS):
+                    return True
+
+                # allow all normal YouTube APIs/assets
+                return False
+
+            # googlevideo carries both real media and ad media
+            if "googlevideo.com" in req_host:
+                # ad stream hints
+                if any(x in u for x in ("ctier", "oad", "adformat", "midroll")):
+                    return True
+
+                # real playback/manifests/range requests
+                if any(x in u for x in ("videoplayback", "manifest", "initplayback")):
+                    return False
+
+                # safest fallback for YouTube media host
+                return False
+
+            # Let all other YouTube-related requests pass untouched
+            return False
+
+        # -------------------------------------------------
+        # Third-party ad tech signals
+        # -------------------------------------------------
+        if req_type in ("script", "xmlhttprequest", "subdocument") and is_third_party:
+
             HIGH_SIGNAL = (
                 "doubleclick",
                 "googlesyndication",
@@ -644,13 +791,16 @@ class EasyListEngine:
                 "outbrain",
                 "adnxs",
             )
+
             if any(k in u for k in HIGH_SIGNAL):
                 return True
 
-        # -----------------------------
-        # Media blocking (third-party only)
-        # -----------------------------
-        if req_type == "media" and (not same_site):
+
+        # -------------------------------------------------
+        # Media ad blocking
+        # -------------------------------------------------
+        if req_type == "media" and is_third_party:
+
             AD_MEDIA_HOSTS = (
                 "doubleclick.net",
                 "googlesyndication.com",
@@ -660,66 +810,98 @@ class EasyListEngine:
                 "taboola.com",
                 "outbrain.com",
             )
-            if any(req_host == h or req_host.endswith("." + h) for h in AD_MEDIA_HOSTS):
+
+            if any(req_host.endswith(x) for x in AD_MEDIA_HOSTS):
                 return True
 
-        # -----------------------------
-        # YouTube image protection
-        # -----------------------------
+
+        # -------------------------------------------------
+        # Image safety rules
+        # -------------------------------------------------
         if req_type == "image":
+
+            # allow first-party images always
+            if same_site:
+                return False
+                
+            # Allow common image CDNs
+            if req_type == "image" and req_host.endswith((
+                "cloudfront.net",
+                "akamaized.net",
+                "fastly.net",
+                "imgix.net",
+                "shopifycdn.com",
+                "ichef.bbci.co.uk",
+                "bbci.co.uk",
+            )):
+                return False
+
+            # allow YouTube image infrastructure
             YT_IMAGE_HOSTS = (
                 "ytimg.com",
                 "ggpht.com",
                 "googleusercontent.com",
             )
-            if any(req_host == h or req_host.endswith("." + h) for h in YT_IMAGE_HOSTS):
+
+            if any(req_host.endswith(x) for x in YT_IMAGE_HOSTS):
                 return False
 
-        # -----------------------------
-        # Never block same-site images
-        # -----------------------------
-        if req_type == "image" and same_site:
-            return False
-
-        # -----------------------------
-        # Ad iframes (fixed indentation bug)
-        # -----------------------------
-        IFRAME_AD_HINTS = (
-            "doubleclick",
-            "googlesyndication",
-            "adservice",
-            "adnxs",
-            "taboola",
-            "outbrain",
-        )
-
-        if req_type == "subdocument" and (not same_site):
-            if any(k in u for k in IFRAME_AD_HINTS):
+            # block only obvious ad-image networks
+            if is_third_party and any(k in req_host for k in (
+                "doubleclick",
+                "adnxs",
+                "criteo",
+                "taboola",
+                "outbrain",
+            )):
                 return True
 
-        # -----------------------------
-        # EasyList (image/media/subdocument only)
-        # -----------------------------
-        if req_type not in ("image", "media", "subdocument"):
-            return False
+        # -------------------------------------------------
+        # EasyList resource gate
+        # -------------------------------------------------
+        allowed_types = {
+            "image",
+            "media",
+            "subdocument",
+            "script",
+            "xmlhttprequest",
+        }
 
+        if req_type not in allowed_types:
+            return False
+            
+        #if same_site and req_type in ("stylesheet", "font"):
+            #return False
+
+        # -------------------------------------------------
+        # EasyList rule evaluation
+        # -------------------------------------------------
         for rule in self.network_rules:
+
+            if rule.hint and rule.hint not in u:
+                continue
+
             if not _domain_option_allows(fp_host, rule.opts):
                 continue
 
             if "third-party" in rule.opts and not is_third_party:
                 continue
+
             if "~third-party" in rule.opts and is_third_party:
                 continue
+    
+            type_flags = {"image", "media", "subdocument", "script", "xmlhttprequest"}
 
-            type_flags = {"image", "media", "subdocument"}
             specified = [t for t in type_flags if t in rule.opts]
+
             if specified and req_type not in specified:
                 continue
 
             if rule.re.search(u):
+
                 if rule.is_exception:
                     return False
+    
                 return True
 
         return False
@@ -745,15 +927,44 @@ class EasyListEngine:
 
         selectors = [s for s in selectors if s not in exc]
 
-        if not selectors:
-            return ""
-
         lines = []
+
+        # Convert EasyList selectors to CSS
         for sel in selectors:
-            sel = sel.replace("`", "")
+
+            # sanitize selector
+            sel = sel.replace("`", "").replace("\n", "").strip()
+
+            # skip invalid selectors
+            if not sel or sel.startswith("@"):
+                continue
+
+            # skip extremely long selectors (prevents parser issues)
+            if len(sel) > 500:
+                continue
+
             lines.append(
                 f"{sel} {{ display: none !important; visibility: hidden !important; }}"
             )
+
+        # -------------------------------------------------
+        # YouTube cosmetic ad blocking
+        # -------------------------------------------------
+        if "youtube.com" in host:
+            lines += [
+                ".video-ads { display:none !important; }",
+                ".ytp-ad-module { display:none !important; }",
+                ".ytp-ad-overlay-container { display:none !important; }",
+                ".ytp-ad-player-overlay { display:none !important; }",
+                ".ytp-ad-text-overlay { display:none !important; }",
+                ".ytp-ad-image-overlay { display:none !important; }",
+                ".ytp-ad-progress { display:none !important; }",
+                ".ytp-ad-preview-container { display:none !important; }",
+                ".ytp-ad-skip-button-container { display:none !important; }",
+            ]
+
+        if not lines:
+            return ""
 
         return "\n".join(lines)
         
@@ -814,7 +1025,7 @@ class StealthInterceptor(QWebEngineUrlRequestInterceptor):
         if host in ("localhost", "127.0.0.1") \
            or host.startswith("192.168.") \
            or host.startswith("10.") \
-           or host.startswith("172."):
+           or host.startswith(tuple(f"172.{i}." for i in range(16,32))):
             return
 
         # --------------------------------------------------
@@ -918,7 +1129,6 @@ class StealthInterceptor(QWebEngineUrlRequestInterceptor):
                 return
         except Exception as e:
             print("Interceptor error:", e)
-            return
 
 # ===================== Cosmetic injection helper =====================
 
@@ -1162,6 +1372,10 @@ class DarkelfMiniAISentinel:
                 if pat in focus:
                     self.intrusion_attempts += 1
                     event['threats'].append(f"INTRUSION:{key.upper()}:{pat}")
+                    # Escalate repeated intrusions
+                    if self.intrusion_attempts >= 3:
+                        event['risk_level'] = 'critical'
+                        self.intrusion_attempts = 0
                     # Only some categories should immediately be critical.
                     if key in ("sql_injection", "path_traversal", "command_injection", "exfil"):
                         event['risk_level'] = 'critical'
@@ -1301,32 +1515,44 @@ class DarkelfMiniAISentinel:
 
         self.events.append(event)
 
+        # notify UI to refresh shield
+        if self.ui:
+            self.ui.update_miniai_icon()
+
         # -------------------------
         # 5) Lockdown trigger (keep behavior intact; still immediate on critical)
         # -------------------------
-        real_attack = any(t.startswith((
-            "INTRUSION",
-            "MALWARE",
-            "EXPLOIT",
-            "TOOL"
-        )) for t in event['threats'])
+        real_attack = any(
+            kw in t.upper()
+            for t in event.get('threats', [])
+            for kw in ("INTRUSION", "MALWARE", "EXPLOIT", "TOOL")
+        )
 
-        if event['risk_level'] == 'critical' and real_attack:
+        # -------------------------------------------------
+        # Lockdown trigger
+        # -------------------------------------------------
+
+        if event.get('risk_level') == 'critical' and real_attack:
 
             self.critical_events.append(now)
 
             print("\n🔴 [MiniAI] CRITICAL threat detected!")
+            print("Threats:", event.get('threats'))
 
-            self.lockdown_active = True
-            self.lockdown_triggered_at = now
+            # Activate lockdown only if not already active
+            if not self.lockdown_active:
+                self.lockdown_active = True
+                self.lockdown_triggered_at = now
+                print("🔒 Darkelf MiniAI LOCKDOWN ENGAGED")
 
-            # Count critical events inside window
+            # Count critical events inside time window
             recent = [t for t in self.critical_events if (now - t) < self.CRITICAL_WINDOW_SECONDS]
 
             if len(recent) >= self.panic_threshold:
                 self.trigger_panic_mode("Multiple critical intrusion events")
 
             print("🛑 Event:", event)
+
 
     def on_http_blocked(self, url):
 
@@ -3195,7 +3421,16 @@ def create_color_palette_menu(parent, callback):
         "#444444","#666666","#999999",
         "#ff4d4f","#ff7a45","#ffa940",
         "#ffd666","#73d13d","#36cfc9","#40a9ff",
-        "#597ef7","#9254de","#f759ab","#bfbfbf"
+        "#597ef7","#9254de","#f759ab","#bfbfbf",
+        "#FFFFFF",   # white
+        "#FFC0CB",   # baby pink
+        "#00BFA6",   # teal
+        "#FF6F61",   # coral
+        "#8BC34A",   # light green
+        "#FFB6C1",   # light pink
+        "#FFD700",   # gold
+        "#7B68EE",   # medium purple
+        "#20B2AA"    # light sea green
     ]
 
     row = 0
@@ -3241,7 +3476,7 @@ def create_color_palette_menu(parent, callback):
 class DarkelfBrowser(QMainWindow):
     def __init__(self, profile):
         super().__init__()
-        
+                
         self.accent_color = "#34C759"
 
         self.toolbar = self._make_toolbar()
@@ -3250,7 +3485,9 @@ class DarkelfBrowser(QMainWindow):
         self.resize(1200, 800)
 
         self.shared_profile = profile
-
+        
+        install_darkelf_youtube_adblock(profile)
+        
         print("OffTheRecord:", self.shared_profile.isOffTheRecord())
 
         self.easy = EasyListEngine()
@@ -3259,6 +3496,8 @@ class DarkelfBrowser(QMainWindow):
         print("Loaded network rules:", len(self.easy.network_rules))
 
         self.mini_ai = DarkelfMiniAISentinel()
+        
+        self.mini_ai.ui = self
 
         self.interceptor = StealthInterceptor(
             self.easy,
@@ -3331,7 +3570,13 @@ class DarkelfBrowser(QMainWindow):
         # Hotkeys
         # -----------------------------
         self.setup_hotkeys()
-
+        
+        #----------------------------
+        # Timer For Darkelf MiniAI
+        #----------------------------
+        self.miniai_timer = QTimer()
+        self.miniai_timer.timeout.connect(self.update_miniai_icon)
+        self.miniai_timer.start(1500)
         # -----------------------------
         # Memory cleanup timers
         # -----------------------------
@@ -3418,19 +3663,15 @@ class DarkelfBrowser(QMainWindow):
     def update_miniai_icon(self):
 
         if self.mini_ai.panic_mode_active:
-            color = "#ff0033"
+            color = "#8B0000"  # panic
 
         elif self.mini_ai.lockdown_active:
-            color = "#ff8800"
+            color = "#ff0033"  # lockdown
 
         else:
-            color = self.accent_color
+            color = self.accent_color  # normal
 
-        self.miniai_button.setIcon(create_shield_icon(color))
-        
-        self.miniai_timer = QTimer()
-        self.miniai_timer.timeout.connect(self.update_miniai_icon)
-        self.miniai_timer.start(1500)
+        self.miniai_action.setIcon(make_shield_icon(color, 18))
 
     def make_outline_lock_icon(self, color="#ffffff", size=16):
         pix = QPixmap(size, size)
@@ -3451,7 +3692,7 @@ class DarkelfBrowser(QMainWindow):
 
         painter.end()
         return QIcon(pix)
-    
+        
     def _make_toolbar(self):
 
         tb = QToolBar()
@@ -4084,7 +4325,7 @@ class DarkelfBrowser(QMainWindow):
 
         view = QWebEngineView(self)
         view._profile = profile
-
+        
         page = HardenedWebPage(view, profile, canvas_seed=canvas_seed)
         view.setPage(page)
         page.fullScreenRequested.connect(self.handle_fullscreen)
