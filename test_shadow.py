@@ -43,8 +43,8 @@ except:
 import urllib.request
 from urllib.error import URLError, HTTPError
     
-#devnull = open(os.devnull, 'w')
-#os.dup2(devnull.fileno(), sys.stderr.fileno())
+devnull = open(os.devnull, 'w')
+os.dup2(devnull.fileno(), sys.stderr.fileno())
 
 JS_YOUTUBE_AD_NEUTRALIZER = r"""
 (function() {
@@ -1100,7 +1100,11 @@ class StealthInterceptor(QWebEngineUrlRequestInterceptor):
                 type_map[enum_value] = name
 
         req_type = type_map.get(rt)
-
+        
+        # 🔥 FAST PATH — skip heavy processing for safe resources
+        if req_type in ("image", "font", "stylesheet"):
+            return
+            
         if req_type is None:
             if hasattr(QWebEngineUrlRequestInfo.ResourceType, "ResourceTypeMainFrame"):
                 if rt == QWebEngineUrlRequestInfo.ResourceType.ResourceTypeMainFrame:
@@ -1175,7 +1179,7 @@ class DarkelfMiniAISentinel:
         self.redirects = []
         # Aggressive lockdown!
         self.lockdown_active = False
-        self.lockdown_threshold = 1  # 1 critical event triggers lockdown
+        self.lockdown_threshold = 5  # 1 critical event triggers lockdown
         self.lockdown_triggered_at = None
         self.tracker_window = deque(maxlen=50)
         self.domain_risk_cache = {}
