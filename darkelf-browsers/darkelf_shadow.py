@@ -1,5 +1,5 @@
 """
-# Darkelf Shadow Browser v4.3.3
+# Darkelf Shadow Browser v4.3.4
 Ephemeral, Privacy-Focused Web Browser (Qt / WebEngine Build)
 
 Copyright (C) 2025 Dr. Kevin Moore
@@ -169,11 +169,53 @@ except:
 import urllib.request
 from urllib.error import URLError, HTTPError
 
+from PySide6.QtNetwork import QNetworkProxyFactory, QSslConfiguration, QSslSocket, QSsl
+QNetworkProxyFactory.setUseSystemConfiguration(True)
+
+CHROME_UA = (
+    b"Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    b"AppleWebKit/537.36 (KHTML, like Gecko) "
+    b"Chrome/134.0.0.0 Safari/537.36"
+)
+
+WEBKIT_UA = (
+    b"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    b"AppleWebKit/605.1.15 (KHTML, like Gecko)"
+)
+
+def configure_ssl():
+    try:
+        if not QSslSocket.supportsSsl():
+            print("❌ SSL not supported")
+            return
+
+        config = QSslConfiguration.defaultConfiguration()
+
+        # ✅ Correct enum location
+        config.setProtocol(QSsl.TlsV1_2OrLater)
+
+        # ⚠️ WARNING: disables cert validation (unsafe)
+        config.setPeerVerifyMode(QSslSocket.VerifyNone)
+
+        QSslConfiguration.setDefaultConfiguration(config)
+
+        print("✅ SSL configured")
+
+    except Exception as e:
+        print("SSL config error:", e)
+        
 def run_shadow():
     return "ok"
+
+# 🔒 Secure domain check helper
+def is_domain(host: str, domain: str) -> bool:
+    host = (host or "").lower()
+    domain = domain.lower()
+
+    return host == domain or host.endswith("." + domain)
     
-#devnull = open(os.devnull, 'w')
-#os.dup2(devnull.fileno(), sys.stderr.fileno())
+devnull = open(os.devnull, 'w')
+os.dup2(devnull.fileno(), sys.stderr.fileno())
 
 # ===================== Secure No-Trace Downloads helpers =====================
 
@@ -651,9 +693,9 @@ class EasyListEngine:
             return False
 
         # Do not interfere with testing pages
-        if "browserleaks.com" in fp_host:
+        if is_domain(fp_host, "browserleaks.com"):
             return False
-
+        
         def _site_key(host: str) -> str:
             parts = [p for p in (host or "").split(".") if p]
             return ".".join(parts[-2:]) if len(parts) >= 2 else (host or "")
@@ -821,13 +863,11 @@ class StealthInterceptor(QWebEngineUrlRequestInterceptor):
 
         qurl = info.requestUrl()
         req_url = qurl.toString()
-
+                
         scheme = (qurl.scheme() or "").lower()
         host = (qurl.host() or "").lower()
 
-        # 🔥 CRITICAL: Apply UA EARLY
         self._apply_special_headers(info, host)
-
         # --------------------------------------------------
         # MiniAI Panic Mode
         # --------------------------------------------------
@@ -873,31 +913,57 @@ class StealthInterceptor(QWebEngineUrlRequestInterceptor):
             return
 
         # --------------------------------------------------
-        # FORCE HTTPS (Smart Upgrade)
+        # SAFE HTTPS UPGRADE (VPN + CDN compatible)
         # --------------------------------------------------
+
         rt = info.resourceType()
 
-        if scheme == "http" and rt != QWebEngineUrlRequestInfo.ResourceType.ResourceTypeMainFrame:
-            https_url = QUrl(qurl)
-            https_url.setScheme("https")
-            self.hsts_hosts.add(host)
+        # Domains known to break with forced HTTPS (CDNs, streaming, etc.)
+        HTTPS_EXEMPT = (
+            "googlevideo.com",
+            "ytimg.com",
+            "gstatic.com",
+            "cloudfront.net",
+            "akamaihd.net",
+            "fbcdn.net",
+        )
 
-            if self.mini_ai:
-                try:
-                    self.mini_ai.on_http_blocked(req_url)
-                except Exception as e:
-                    print(e)
-                    pass
+        # Only upgrade MAIN PAGE requests (not subresources)
+        if scheme == "http" and rt == QWebEngineUrlRequestInfo.ResourceType.ResourceTypeMainFrame:
 
-            info.redirect(https_url)
-            return
+            # Skip problematic domains
+            if any(host.endswith(d) for d in HTTPS_EXEMPT):
+                return
 
-        # Prevent downgrade
+            try:
+                https_url = QUrl(qurl)
+                https_url.setScheme("https")
+
+                # Track HSTS-like behavior
+                self.hsts_hosts.add(host)
+
+                if self.mini_ai:
+                    try:
+                        self.mini_ai.on_http_blocked(req_url)
+                    except Exception:
+                        pass
+
+                info.redirect(https_url)
+                return
+
+            except Exception as e:
+                print("HTTPS upgrade failed:", e)
+
+
+        # Prevent downgrade ONLY if we already upgraded before
         if scheme == "http" and host in self.hsts_hosts:
-            https_url = QUrl(qurl)
-            https_url.setScheme("https")
-            info.redirect(https_url)
-            return
+            try:
+                https_url = QUrl(qurl)
+                https_url.setScheme("https")
+                info.redirect(https_url)
+                return
+            except Exception as e:
+                print("HSTS redirect failed:", e)
 
         # --------------------------------------------------
         # Resource Type Detection
@@ -948,14 +1014,20 @@ class StealthInterceptor(QWebEngineUrlRequestInterceptor):
     # --------------------------------------------------
     def _apply_special_headers(self, info, host: str) -> None:
         try:
-            if "youtube.com" in host or "youtu.be" in host:
-                ua = (
-                    b"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    b"AppleWebKit/605.1.15 (KHTML, like Gecko)"
-                )
-                info.setHttpHeader(b"User-Agent", ua)
+            # Normalize host
+            host = (host or "").lower()
+
+            # ✅ YouTube → WebKit
+            if is_domain(host, "youtube.com") or is_domain(host, "youtu.be"):
+                info.setHttpHeader(b"User-Agent", WEBKIT_UA)
+    
+            # ✅ Everything else → Chrome
+            else:
+                info.setHttpHeader(b"User-Agent", CHROME_UA)
+
         except Exception as e:
-            print(e)
+            print("UA error:", e)
+                
 # ===================== Cosmetic injection helper =====================
 
 def js_inject_style_tag(style_id: str, css: str) -> str:
@@ -4576,8 +4648,9 @@ if __name__ == "__main__":
     profile.setHttpAcceptLanguage("en-US,en;q=0.9")
     
     profile.setHttpUserAgent(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/134.0.0.0 Safari/537.36"
     )
     
     settings = profile.settings()
@@ -4599,7 +4672,8 @@ if __name__ == "__main__":
     script.setRunsOnSubFrames(True)
 
     profile.scripts().insert(script)
-
+    
+    configure_ssl()
     # ===== PASS PROFILE INTO WINDOW =====
     w = DarkelfBrowser(profile)
     w.show()
