@@ -1,5 +1,5 @@
 """
-# Darkelf Shadow Browser v4.3.4
+# Darkelf Shadow Browser v4.3.5
 Ephemeral, Privacy-Focused Web Browser (Qt / WebEngine Build)
 
 Copyright (C) 2025 Dr. Kevin Moore
@@ -182,7 +182,7 @@ WEBKIT_UA = (
     b"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     b"AppleWebKit/605.1.15 (KHTML, like Gecko)"
 )
-
+    
 def configure_ssl():
     try:
         if not QSslSocket.supportsSsl():
@@ -214,8 +214,8 @@ def is_domain(host: str, domain: str) -> bool:
 
     return host == domain or host.endswith("." + domain)
     
-devnull = open(os.devnull, 'w')
-os.dup2(devnull.fileno(), sys.stderr.fileno())
+#devnull = open(os.devnull, 'w')
+#os.dup2(devnull.fileno(), sys.stderr.fileno())
 
 # ===================== Secure No-Trace Downloads helpers =====================
 
@@ -1017,17 +1017,14 @@ class StealthInterceptor(QWebEngineUrlRequestInterceptor):
             # Normalize host
             host = (host or "").lower()
 
-            # ✅ YouTube → WebKit
-            if is_domain(host, "youtube.com") or is_domain(host, "youtu.be"):
+            if is_domain(host, "youtube.com") or is_domain(host, "youtu.be") \
+            or is_domain(host, "ytimg.com") or is_domain(host, "googlevideo.com"):
                 info.setHttpHeader(b"User-Agent", WEBKIT_UA)
-    
-            # ✅ Everything else → Chrome
             else:
                 info.setHttpHeader(b"User-Agent", CHROME_UA)
-
-        except Exception as e:
-            print("UA error:", e)
                 
+        except Exception as e:
+            print("Header error", e)
 # ===================== Cosmetic injection helper =====================
 
 def js_inject_style_tag(style_id: str, css: str) -> str:
@@ -3163,7 +3160,83 @@ class HardenedWebPage(QWebEnginePage):
         })();
         """
         self.inject_script(script, injection_point=QWebEngineScript.DocumentCreation, subframes=True)
+        
+    def inject_youtube_js_spoof(self):
+        script = """
+        (() => {
+            try {
+                const host = location.hostname || "";
 
+                const isYouTube =
+                    host.includes("youtube.com") ||
+                    host.includes("youtu.be") ||
+                    host.includes("ytimg.com") ||
+                    host.includes("googlevideo.com");
+
+                if (!isYouTube) return;
+
+                const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)";
+
+                Object.defineProperty(navigator, "userAgent", {
+                    get: () => UA,
+                    configurable: true
+                });
+
+                Object.defineProperty(navigator, "appVersion", {
+                    get: () => UA,
+                    configurable: true
+                });
+
+                Object.defineProperty(navigator, "platform", {
+                    get: () => "MacIntel",
+                    configurable: true
+                });
+
+                Object.defineProperty(navigator, "vendor", {
+                    get: () => "Apple Computer, Inc.",
+                    configurable: true
+                });
+
+            } catch(e) {}
+        })();
+        """
+
+        self.inject_script(
+            script,
+            injection_point=QWebEngineScript.DocumentCreation,
+            subframes=True
+        )
+        
+    def inject_global_chrome_spoof(self):
+        script = """
+        (() => {
+            try {
+                const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36";
+
+                Object.defineProperty(navigator, "userAgent", {
+                    get: () => UA,
+                    configurable: true
+                });
+
+                Object.defineProperty(navigator, "appVersion", {
+                    get: () => UA,
+                    configurable: true
+                });
+
+                Object.defineProperty(navigator, "vendor", {
+                    get: () => "Google Inc.",
+                    configurable: true
+                });
+
+            } catch(e) {}
+        })();
+        """
+
+        self.inject_script(
+            script,
+            injection_point=QWebEngineScript.DocumentCreation,
+            subframes=True
+        )
         
     def inject_all_scripts(self):
         self.stealth_webrtc_block()
@@ -3181,7 +3254,8 @@ class HardenedWebPage(QWebEnginePage):
         self.inject_hw_concurrency_spoof()
         self.inject_iframe_environment_harmonizer()
         self.inject_stealth_chrome_environment()
-        
+        self.inject_global_chrome_spoof()
+        self.inject_youtube_js_spoof()
 
     def acceptNavigationRequest(self, url, navtype, isMainFrame):
         if url.scheme() == "file":
