@@ -1,5 +1,5 @@
 """
-# Darkelf Shadow Browser v4.3.6
+# Darkelf Shadow Browser v4.3.7
 Ephemeral, Privacy-Focused Web Browser (Qt / WebEngine Build)
 
 Copyright (C) 2025 Dr. Kevin Moore
@@ -924,8 +924,8 @@ class StealthInterceptor(QWebEngineUrlRequestInterceptor):
                 if self.mini_ai:
                     try:
                         self.mini_ai.on_http_blocked(req_url)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print("Error:", e)
 
                 info.redirect(https_url)
                 return
@@ -1649,7 +1649,7 @@ TOP 10 THREAT DOMAINS:
 def make_icon(color=None, size=24):
 
     if color is None:
-        color = "#34C759"
+        color = "#A855F7"
 
     pix = QPixmap(size, size)
     pix.fill(Qt.transparent)
@@ -3431,7 +3431,7 @@ class DarkelfBrowser(QMainWindow):
     def __init__(self, profile):
         super().__init__()
                         
-        self.accent_color = "#34C759"
+        self.accent_color = "#A855F7"
 
         self.toolbar = self._make_toolbar()
 
@@ -4194,8 +4194,8 @@ class DarkelfBrowser(QMainWindow):
 
             try:
                 view.page().runJavaScript(js)
-            except:
-                pass
+            except Exception as e:
+                print("Error:", e)
 
 
     def _configure_tabbar_small(self):
@@ -4577,8 +4577,8 @@ class DarkelfBrowser(QMainWindow):
                 if isinstance(view, QWebEngineView):
                     try:
                         view.page().triggerAction(QWebEnginePage.Stop)
-                    except:
-                        pass
+                    except Exception as e:
+                        print("Error:", e)
 
             # Use the default profile once instead of per-tab
             profile = QWebEngineProfile.defaultProfile()
@@ -4673,7 +4673,7 @@ if __name__ == "__main__":
     palette.setColor(QPalette.Text, QColor("#eafaf0"))
     palette.setColor(QPalette.Button, QColor("#0f1114"))
     palette.setColor(QPalette.ButtonText, QColor("#eafaf0"))
-    palette.setColor(QPalette.Highlight, QColor("#34C759"))
+    palette.setColor(QPalette.Highlight, QColor("#A855F7"))
     palette.setColor(QPalette.HighlightedText, QColor("#0a0b10"))
     app.setPalette(palette)
 
@@ -4682,7 +4682,7 @@ if __name__ == "__main__":
     border: 1px solid #1a1f23; border-radius: 6px; padding: 6px;}
     QMenu::separator{ height:1px; background:#23292e; margin:6px 8px; }
     QMenu::item{ color: #e5e7eb; padding:6px 16px; border-radius:8px; background:transparent;}
-    QMenu::item:selected, QMenu::item:hover{background:#34C759;color:#181a1b;font-weight:bold;}
+    QMenu::item:selected, QMenu::item:hover{background:#A855F7;color:#181a1b;font-weight:bold;}
     QMenu::item:disabled {color:#7f8c8d;background:transparent;}
     QMenu::icon{margin-right:8px;} QMenu::item{cursor:pointer;}
     QToolTip{background:#161a1e;color:#e5e7eb;border:1px solid #22292f; border-radius:0px; padding:6px 8px;}
