@@ -1,5 +1,5 @@
 """
-# Darkelf Shadow Browser v4.3.5
+# Darkelf Shadow Browser v4.3.6
 Ephemeral, Privacy-Focused Web Browser (Qt / WebEngine Build)
 
 Copyright (C) 2025 Dr. Kevin Moore
@@ -182,28 +182,7 @@ WEBKIT_UA = (
     b"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     b"AppleWebKit/605.1.15 (KHTML, like Gecko)"
 )
-    
-def configure_ssl():
-    try:
-        if not QSslSocket.supportsSsl():
-            print("❌ SSL not supported")
-            return
-
-        config = QSslConfiguration.defaultConfiguration()
-
-        # ✅ Correct enum location
-        config.setProtocol(QSsl.TlsV1_2OrLater)
-
-        # ⚠️ WARNING: disables cert validation (unsafe)
-        config.setPeerVerifyMode(QSslSocket.VerifyNone)
-
-        QSslConfiguration.setDefaultConfiguration(config)
-
-        print("✅ SSL configured")
-
-    except Exception as e:
-        print("SSL config error:", e)
-        
+            
 def run_shadow():
     return "ok"
 
@@ -214,8 +193,8 @@ def is_domain(host: str, domain: str) -> bool:
 
     return host == domain or host.endswith("." + domain)
     
-#devnull = open(os.devnull, 'w')
-#os.dup2(devnull.fileno(), sys.stderr.fileno())
+devnull = open(os.devnull, 'w')
+os.dup2(devnull.fileno(), sys.stderr.fileno())
 
 # ===================== Secure No-Trace Downloads helpers =====================
 
@@ -3047,7 +3026,7 @@ class HardenedWebPage(QWebEnginePage):
         }})();
         """
         self.inject_script(js, injection_point=QWebEngineScript.DocumentCreation, subframes=True)
-        
+                
     def inject_stealth_chrome_environment(self):
         script = """
         (() => {
@@ -3460,12 +3439,7 @@ class DarkelfBrowser(QMainWindow):
         self.resize(1200, 800)
 
         self.shared_profile = profile
-        
-        self.shared_profile.setHttpUserAgent(
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/605.1.15 (KHTML, like Gecko)"
-        )
-        
+                
         print("OffTheRecord:", self.shared_profile.isOffTheRecord())
 
         self.easy = EasyListEngine()
@@ -4747,7 +4721,6 @@ if __name__ == "__main__":
 
     profile.scripts().insert(script)
     
-    configure_ssl()
     # ===== PASS PROFILE INTO WINDOW =====
     w = DarkelfBrowser(profile)
     w.show()
