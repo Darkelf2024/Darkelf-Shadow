@@ -1,5 +1,5 @@
 """
-# Darkelf Shadow Browser v4.3.7
+# Darkelf Shadow Browser v4.3.8
 Ephemeral, Privacy-Focused Web Browser (Qt / WebEngine Build)
 
 Copyright (C) 2025 Dr. Kevin Moore
@@ -132,7 +132,7 @@ import tempfile
 import math
 import random
 import gc
-from PySide6.QtCore import Qt, QUrl, QUrlQuery, QSize, QPointF, QRectF, QTimer
+from PySide6.QtCore import Qt, QUrl, QUrlQuery, QSize, QPointF, QRectF, QTimer, QPropertyAnimation, QThread, Signal
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLineEdit, QToolBar, QPushButton, QLabel, QWidget, QDialog,
     QTabWidget, QTabBar, QMessageBox, QToolButton, QProgressBar, QMenu, QWidgetAction, QGridLayout,
@@ -140,7 +140,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import (
     QAction, QIcon, QPixmap, QPainter, QColor,
-    QPalette, QPen, QBrush, QPolygonF, QPainterPath
+    QPalette, QPen, QBrush, QPolygonF, QPainterPath, QFont
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import (
@@ -172,6 +172,111 @@ from urllib.error import URLError, HTTPError
 from PySide6.QtNetwork import QNetworkProxyFactory, QSslConfiguration, QSslSocket, QSsl
 QNetworkProxyFactory.setUseSystemConfiguration(True)
 
+#devnull = open(os.devnull, 'w')
+#os.dup2(devnull.fileno(), sys.stderr.fileno())
+
+# ------------------ SPLASH ------------------
+
+class BootSplash(QWidget):
+    def __init__(self):
+        super().__init__()
+
+        self.setWindowFlags(Qt.FramelessWindowHint)
+        self.setFixedSize(420, 200)
+
+        layout = QVBoxLayout(self)
+
+        self.title = QLabel("Darkelf Nexus")
+        self.title.setAlignment(Qt.AlignCenter)
+        self.title.setFont(QFont("Arial", 18, QFont.Bold))
+
+        self.status = QLabel("Initializing...")
+        self.status.setAlignment(Qt.AlignCenter)
+
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 100)
+        self.bar.setValue(0)
+        self.bar.setFormat("%p%")
+
+        layout.addStretch()
+        layout.addWidget(self.title)
+        layout.addWidget(self.status)
+        layout.addWidget(self.bar)
+        layout.addStretch()
+
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #0d0f12;
+                color: #A855F7;
+            }
+            QProgressBar {
+                border: 1px solid #222;
+                height: 18px;
+                text-align: center;
+                background: #111;
+                color: white;
+            }
+            QProgressBar::chunk {
+                background-color: #A855F7;
+            }
+        """)
+
+# ------------------ WORKER ------------------
+
+class BootWorker(QThread):
+    progress = Signal(int, str)
+    finished = Signal(object)  # will emit AI (not window)
+
+    def run(self):
+        try:
+            # ---- INIT ----
+            self.progress.emit(5, "Initializing environment...")
+
+            # ---- FILTERS ----
+            self.progress.emit(50, "Loading filter engine...")
+            engine = EasyListEngine()
+
+            self.progress.emit(55, "Downloading filters...")
+            engine.load_and_build(EASYLIST_URLS)
+
+            self.progress.emit(65, "Filters ready")
+
+            # ---- MINI AI ----
+            self.progress.emit(70, "Starting MiniAI...")
+            ai = DarkelfMiniAISentinel()
+
+            # ---- FINAL ----
+            self.progress.emit(90, "Preparing UI...")
+            self.msleep(200)
+
+            self.progress.emit(100, "Launching...")
+
+            # ✅ ONLY pass data back — NOT Qt objects
+            self.finished.emit(ai)
+
+        except Exception as e:
+            print("BOOT ERROR:", e)
+
+
+# ------------------ UI UPDATE ------------------
+
+def update_progress(val, text):
+    splash.status.setText(text)
+
+    anim = QPropertyAnimation(splash.bar, b"value")
+    anim.setDuration(300)
+    anim.setStartValue(splash.bar.value())
+    anim.setEndValue(val)
+    anim.start()
+
+    splash._anim = anim  # prevent garbage collection
+
+def boot_done(ai):
+    splash.close()
+
+    w = DarkelfBrowser(profile)
+    w.show()
+    
 CHROME_UA = (
     b"Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     b"AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -193,9 +298,6 @@ def is_domain(host: str, domain: str) -> bool:
 
     return host == domain or host.endswith("." + domain)
     
-devnull = open(os.devnull, 'w')
-os.dup2(devnull.fileno(), sys.stderr.fileno())
-
 # ===================== Secure No-Trace Downloads helpers =====================
 
 def _safe_download_dir() -> str:
@@ -3031,32 +3133,76 @@ class HardenedWebPage(QWebEnginePage):
         script = """
         (() => {
 
-            const patchPlugins = (nav) => {
+            // ---------- deterministic hash ----------
+            const hashString = (str) => {
+                let h = 0;
+                for (let i = 0; i < str.length; i++) {
+                    h = (h << 5) - h + str.charCodeAt(i);
+                    h |= 0;
+                }
+                return Math.abs(h);
+            };
+
+            // ---------- seeded shuffle ----------
+            const seededShuffle = (array, seed) => {
+                let arr = array.slice();
+                for (let i = arr.length - 1; i > 0; i--) {
+                    seed = (seed * 9301 + 49297) % 233280;
+                    const j = Math.floor((seed / 233280) * (i + 1));
+                    [arr[i], arr[j]] = [arr[j], arr[i]];
+                }
+                return arr;
+            };
+
+            // ---------- PATCH: plugins ----------
+            const patchPlugins = (nav, win) => {
                 try {
-                    if (!nav.plugins || nav.plugins.length === 0) {
+                    if (!nav) return;
 
-                        const fakePlugins = [
-                            { name: "Chrome PDF Plugin", filename: "internal-pdf-viewer" },
-                            { name: "Chrome PDF Viewer", filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai" },
-                            { name: "Native Client", filename: "internal-nacl-plugin" }
-                        ];
+                    const host = (win.location && win.location.hostname) || "default";
+                    const seed = hashString(host);
 
-                        fakePlugins.length = 3;
-                        fakePlugins.item = (i) => fakePlugins[i];
-                        fakePlugins.namedItem = (name) =>
-                            fakePlugins.find(p => p.name === name);
+                    const basePlugins = [
+                        { name: "Chrome PDF Plugin", filename: "internal-pdf-viewer" },
+                        { name: "Chrome PDF Viewer", filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai" },
+                        { name: "Native Client", filename: "internal-nacl-plugin" }
+                    ];
 
-                        Object.defineProperty(nav, 'plugins', {
-                            get: () => fakePlugins,
-                            configurable: true
-                        });
+                    let plugins;
+
+                    // 🔥 Modern Chrome behavior: sometimes empty
+                    if (seed % 3 === 0) {
+                        plugins = [];
+                    } else {
+                        plugins = seededShuffle(basePlugins, seed);
+
+                        // Slight variation (2–3 plugins)
+                        const cut = 2 + (seed % 2);
+                        plugins = plugins.slice(0, cut);
                     }
+
+                    // emulate PluginArray
+                    plugins.length = plugins.length;
+                    plugins.item = (i) => plugins[i];
+                    plugins.namedItem = (name) =>
+                        plugins.find(p => p.name === name);
+
+                    Object.defineProperty(nav, 'plugins', {
+                        get: () => plugins,
+                        configurable: true
+                    });
+
+                    // keep mimeTypes consistent
+                    Object.defineProperty(nav, 'mimeTypes', {
+                        get: () => [],
+                        configurable: true
+                    });
+
                 } catch (e) {}
             };
 
             const patchChromeRuntime = (win) => {
                 try {
-
                     if (!win.chrome)
                         win.chrome = {};
 
@@ -3066,15 +3212,13 @@ class HardenedWebPage(QWebEnginePage):
                             configurable: true
                         });
                     }
-
                 } catch (e) {}
             };
 
             const patchPermissions = (nav) => {
                 try {
-
                     if (nav.permissions && nav.permissions.query) {
-    
+
                         const originalQuery = nav.permissions.query.bind(nav.permissions);
 
                         nav.permissions.query = function(parameters) {
@@ -3088,7 +3232,6 @@ class HardenedWebPage(QWebEnginePage):
                             return originalQuery(parameters);
                         };
                     }
-
                 } catch (e) {}
             };
 
@@ -3099,7 +3242,7 @@ class HardenedWebPage(QWebEnginePage):
 
                     win.__darkelf_chrome_env = true;
 
-                    patchPlugins(win.navigator);
+                    patchPlugins(win.navigator, win); // ✅ updated
                     patchChromeRuntime(win);
                     patchPermissions(win.navigator);
 
@@ -3111,30 +3254,22 @@ class HardenedWebPage(QWebEnginePage):
 
             // observe iframes
             new MutationObserver((muts) => {
-
                 for (const m of muts) {
-
                     m.addedNodes.forEach((node) => {
-
                         if (!node.tagName)
                             return;
 
                         if (node.tagName.toLowerCase() === "iframe") {
-
                             try {
                                 const w = node.contentWindow;
                                 apply(w);
                             } catch (e) {}
-
                         }
-
                     });
-
                 }
-
             }).observe(document, { childList: true, subtree: true });
 
-            console.log('[DarkelfAI] Chrome environment normalized');
+            console.log('[DarkelfAI] Chrome environment randomized per domain');
 
         })();
         """
@@ -4662,7 +4797,7 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
-    # ===== KEEP YOUR PALETTE =====
+    # ===== PALETTE =====
     palette = QPalette()
     palette.setColor(QPalette.Window, QColor("#0a0b10"))
     palette.setColor(QPalette.WindowText, QColor("#eafaf0"))
@@ -4678,51 +4813,80 @@ if __name__ == "__main__":
     app.setPalette(palette)
 
     app.setStyleSheet(app.styleSheet() + """
-    QMenu { background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #171b20, stop:1 #15191c);
+    QMenu { background: qlineargradient(x1:0,y1:0,x2:0,y1:1, stop:0 #171b20, stop:1 #15191c);
     border: 1px solid #1a1f23; border-radius: 6px; padding: 6px;}
     QMenu::separator{ height:1px; background:#23292e; margin:6px 8px; }
     QMenu::item{ color: #e5e7eb; padding:6px 16px; border-radius:8px; background:transparent;}
     QMenu::item:selected, QMenu::item:hover{background:#A855F7;color:#181a1b;font-weight:bold;}
     QMenu::item:disabled {color:#7f8c8d;background:transparent;}
-    QMenu::icon{margin-right:8px;} QMenu::item{cursor:pointer;}
-    QToolTip{background:#161a1e;color:#e5e7eb;border:1px solid #22292f; border-radius:0px; padding:6px 8px;}
+    QToolTip{background:#161a1e;color:#e5e7eb;border:1px solid #22292f; padding:6px 8px;}
     """)
 
-    # ===== 🔒 TRUE OFF-THE-RECORD PROFILE =====
+    # ===== SPLASH =====
+    splash = BootSplash()
+    splash.show()
+    app.processEvents()
 
-    profile = QWebEngineProfile("", app)   # empty storage name => off-the-record
+    # ===== INIT (NO TOR) =====
+    splash.status.setText("Initializing network...")
+    app.processEvents()
+
+    # ===== PROFILE =====
+    splash.status.setText("Preparing secure profile...")
+    app.processEvents()
+
+    profile = QWebEngineProfile("", app)
     profile.setHttpCacheType(QWebEngineProfile.MemoryHttpCache)
     profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
     profile.setHttpAcceptLanguage("en-US,en;q=0.9")
-    
+
     profile.setHttpUserAgent(
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/134.0.0.0 Safari/537.36"
     )
-    
-    settings = profile.settings()
-        
-    settings.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
-    settings.setAttribute(QWebEngineSettings.WebAttribute.PluginsEnabled, False)
-    settings.setAttribute(QWebEngineSettings.WebAttribute.HyperlinkAuditingEnabled, False)
-    settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows, False)
-    settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanAccessClipboard, False)
-    settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, False)
-    settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, False)
-    settings.setAttribute(QWebEngineSettings.WebAttribute.FullScreenSupportEnabled, True)
 
-    # ===== GLOBAL SCRIPT INJECTION =====
+    settings = profile.settings()
+    settings.setAttribute(QWebEngineSettings.LocalStorageEnabled, True)
+    settings.setAttribute(QWebEngineSettings.PluginsEnabled, False)
+    settings.setAttribute(QWebEngineSettings.HyperlinkAuditingEnabled, False)
+    settings.setAttribute(QWebEngineSettings.JavascriptCanOpenWindows, False)
+    settings.setAttribute(QWebEngineSettings.JavascriptCanAccessClipboard, False)
+    settings.setAttribute(QWebEngineSettings.LocalContentCanAccessRemoteUrls, False)
+    settings.setAttribute(QWebEngineSettings.LocalContentCanAccessFileUrls, False)
+    settings.setAttribute(QWebEngineSettings.FullScreenSupportEnabled, True)
+
+    # ===== SCRIPT INJECTION =====
     script = QWebEngineScript()
     script.setName("darkelf_global_patch")
     script.setInjectionPoint(QWebEngineScript.DocumentCreation)
     script.setWorldId(QWebEngineScript.MainWorld)
     script.setRunsOnSubFrames(True)
-
     profile.scripts().insert(script)
-    
-    # ===== PASS PROFILE INTO WINDOW =====
-    w = DarkelfBrowser(profile)
-    w.show()
-    
+
+    # ===== WORKER =====
+    worker = BootWorker()
+    splash._anim = None
+
+    def update_progress(val, text):
+        splash.status.setText(text)
+
+        anim = QPropertyAnimation(splash.bar, b"value")
+        anim.setDuration(300)
+        anim.setStartValue(splash.bar.value())
+        anim.setEndValue(val)
+        anim.start()
+
+        splash._anim = anim
+
+    def boot_done(ai):
+        splash.close()
+        w = DarkelfBrowser(profile)
+        w.show()
+
+    worker.progress.connect(update_progress)
+    worker.finished.connect(boot_done)
+
+    worker.start()
+
     sys.exit(app.exec())
