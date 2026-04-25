@@ -172,8 +172,8 @@ from urllib.error import URLError, HTTPError
 from PySide6.QtNetwork import QNetworkProxyFactory, QSslConfiguration, QSslSocket, QSsl
 QNetworkProxyFactory.setUseSystemConfiguration(True)
 
-#devnull = open(os.devnull, 'w')
-#os.dup2(devnull.fileno(), sys.stderr.fileno())
+devnull = open(os.devnull, 'w')
+os.dup2(devnull.fileno(), sys.stderr.fileno())
 
 # ------------------ SPLASH ------------------
 
