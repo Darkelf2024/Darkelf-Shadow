@@ -124,52 +124,70 @@ Authored by Dr. Kevin Moore (2025)
 Darkelf Project — Shadow Edition
 """
 
-import platform as _platform
-import secrets
-import hashlib
-import sys, os, uuid
-import tempfile
-import math
-import random
+# -------------------- Standard Library --------------------
 import gc
-from PySide6.QtCore import Qt, QUrl, QUrlQuery, QSize, QPointF, QRectF, QTimer, QPropertyAnimation, QThread, Signal
-from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QLineEdit, QToolBar, QPushButton, QLabel, QWidget, QDialog,
-    QTabWidget, QTabBar, QMessageBox, QToolButton, QProgressBar, QMenu, QWidgetAction, QGridLayout,
-    QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QProgressDialog
-)
-from PySide6.QtGui import (
-    QAction, QIcon, QPixmap, QPainter, QColor,
-    QPalette, QPen, QBrush, QPolygonF, QPainterPath, QFont
-)
-from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWebEngineCore import (
-    QWebEngineProfile,
-    QWebEnginePage,
-    QWebEngineScript,
-    QWebEngineSettings,
-    QWebEngineUrlRequestInfo,
-    QWebEngineUrlRequestInterceptor,
-    QWebEngineDownloadRequest
-)
-
-# ---- Install ad/tracker interceptor ----
-import json
-import re
-import shutil
-from urllib.parse import quote_plus
-import time
+import hashlib
 import http.client
+import json
+import math
+import os
+import platform as _platform
+import random
+import re
+import secrets
+import shutil
+import socket
+import sys
+import tempfile
+import time
+import urllib.request
+import uuid
 from collections import deque
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote_plus
+
 try:
     from urllib.parse import unquote, urlparse
 except:
     def unquote(s): return s
     def urlparse(s): return type("U", (), {"netloc": "", "port": None})()
-import urllib.request
-from urllib.error import URLError, HTTPError
 
-from PySide6.QtNetwork import QNetworkProxyFactory, QSslConfiguration, QSslSocket, QSsl
+
+# -------------------- PySide6 Core --------------------
+from PySide6.QtCore import (
+    Qt, QUrl, QUrlQuery, QSize, QPointF, QRectF,
+    QTimer, QPropertyAnimation, QThread, Signal
+)
+
+# -------------------- PySide6 Widgets --------------------
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QLineEdit, QToolBar, QPushButton, QLabel,
+    QWidget, QDialog, QTabWidget, QTabBar, QMessageBox, QToolButton,
+    QProgressBar, QMenu, QWidgetAction, QGridLayout, QVBoxLayout,
+    QHBoxLayout, QFileDialog, QProgressDialog
+)
+
+# -------------------- PySide6 GUI --------------------
+from PySide6.QtGui import (
+    QAction, QIcon, QPixmap, QPainter, QColor,
+    QPalette, QPen, QBrush, QPolygonF,
+    QPainterPath, QFont
+)
+
+# -------------------- PySide6 WebEngine --------------------
+from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWebEngineCore import (
+    QWebEngineProfile, QWebEnginePage, QWebEngineScript,
+    QWebEngineSettings, QWebEngineUrlRequestInfo,
+    QWebEngineUrlRequestInterceptor, QWebEngineDownloadRequest
+)
+
+# -------------------- PySide6 Network --------------------
+from PySide6.QtNetwork import (
+    QNetworkProxyFactory
+)
+
+# -------------------- Config --------------------
 QNetworkProxyFactory.setUseSystemConfiguration(True)
 
 devnull = open(os.devnull, 'w')
