@@ -186,7 +186,7 @@ class BootSplash(QWidget):
 
         layout = QVBoxLayout(self)
 
-        self.title = QLabel("Darkelf Nexus")
+        self.title = QLabel("Darkelf Shadow")
         self.title.setAlignment(Qt.AlignCenter)
         self.title.setFont(QFont("Arial", 18, QFont.Bold))
 
@@ -214,7 +214,7 @@ class BootSplash(QWidget):
                 height: 18px;
                 text-align: center;
                 background: #111;
-                color: white;
+                color: black;
             }
             QProgressBar::chunk {
                 background-color: #A855F7;
