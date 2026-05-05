@@ -2649,35 +2649,6 @@ class HardenedWebPage(QWebEnginePage):
             injection_point=QWebEngineScript.DocumentCreation,
             subframes=True)
             
-    def inject_timezone_chicago_offset(self):
-        script = """
-        (() => {
-            // Patch Date.prototype.getTimezoneOffset to always return 360 (UTC-6)
-            Object.defineProperty(Date.prototype, "getTimezoneOffset", {
-                value: function() { return 360; },
-                configurable: true
-            });
-            // Patch Intl.DateTimeFormat to always pretend timeZone is UTC
-            const origDTF = Intl.DateTimeFormat;
-            Intl.DateTimeFormat = function(locales, options) {
-                options = options || {};
-                options.timeZone = "UTC";
-                return origDTF.call(this, locales, options);
-            };
-            Intl.DateTimeFormat.prototype = origDTF.prototype;
-            // Patch navigator.timezone if present (rare)
-            if ('timezone' in navigator) {
-                Object.defineProperty(navigator, "timezone", {
-                    get: () => "UTC",
-                    configurable: true
-                });
-            }
-        })();
-        """
-        self.inject_script(
-            script,
-            injection_point=QWebEngineScript.DocumentCreation,
-            subframes=True)
             
     def inject_webgl_fingerprint_per_domain(self):
         script = """
@@ -2950,90 +2921,7 @@ class HardenedWebPage(QWebEnginePage):
         }, true);
         """
         self.inject_script(suppressor_js, name="__darkelf_resize_observer_patch__")
-        
-    def inject_stealth_storage_block(self):
-        # Memory-only storage shim: prevents crashes while avoiding persistence
-        script = r"""
-        (() => {
-          if (window.__darkelf_storage_shim) return;
-          window.__darkelf_storage_shim = true;
-
-          function makeMemoryStorage() {
-            const store = new Map();
-
-            const api = {
-              get length() { return store.size; },
-              key: (i) => Array.from(store.keys())[i] ?? null,
-              getItem: (k) => {
-                k = String(k);
-                return store.has(k) ? store.get(k) : null;
-              },
-              setItem: (k, v) => {
-                k = String(k);
-                v = String(v);
-                store.set(k, v);
-              },
-              removeItem: (k) => { store.delete(String(k)); },
-              clear: () => { store.clear(); }
-            };
-            return api;
-          }
-
-          const memLocal = makeMemoryStorage();
-          const memSession = makeMemoryStorage();
-
-          function def(obj, prop, value) {
-            try {
-              Object.defineProperty(obj, prop, {
-                get: () => value,
-                configurable: true
-              });
-            } catch(e) {}
-          }
-
-          // Provide storage objects so sites don't throw
-          try { def(window, "localStorage", memLocal); } catch(e) {}
-          try { def(window, "sessionStorage", memSession); } catch(e) {}
-
-          // Keep indexedDB disabled if you want (many sites survive without it)
-          try { Object.defineProperty(window, "indexedDB", { get: () => undefined, configurable: true }); } catch(e) {}
-          try { Object.defineProperty(window, "openDatabase", { get: () => undefined, configurable: true }); } catch(e) {}
-
-          // Storage events: optional noop
-          try {
-            window.addEventListener("storage", () => {}, true);
-          } catch(e) {}
-
-          // Iframe defense: apply same shim
-          const applyTo = (w) => {
-            try {
-              if (!w || w.__darkelf_storage_shim) return;
-              w.__darkelf_storage_shim = true;
-              try { def(w, "localStorage", makeMemoryStorage()); } catch(e) {}
-              try { def(w, "sessionStorage", makeMemoryStorage()); } catch(e) {}
-              try { Object.defineProperty(w, "indexedDB", { get: () => undefined, configurable: true }); } catch(e) {}
-              try { Object.defineProperty(w, "openDatabase", { get: () => undefined, configurable: true }); } catch(e) {}
-            } catch(e) {}
-          };
-
-          new MutationObserver((muts) => {
-            for (const m of muts) {
-              for (const node of m.addedNodes) {
-                if (node && node.tagName === "IFRAME") {
-                  try { applyTo(node.contentWindow); } catch(e) {}
-                  try { node.addEventListener("load", () => applyTo(node.contentWindow), { once: true }); } catch(e) {}
-                }
-              }
-            }
-          }).observe(document.documentElement || document, { childList: true, subtree: true });
-
-        })();
-        """
-        self.inject_script(
-            script,
-            injection_point=QWebEngineScript.DocumentCreation,
-            subframes=True)
-            
+                                
     def inject_hw_concurrency_spoof(self):
         script = """
         (() => {
@@ -3401,7 +3289,7 @@ class HardenedWebPage(QWebEnginePage):
             injection_point=QWebEngineScript.DocumentCreation,
             subframes=True
         )
-        
+                
     def inject_all_scripts(self):
         self.stealth_webrtc_block()
         self.block_webrtc_sdp_logging()
@@ -3411,10 +3299,8 @@ class HardenedWebPage(QWebEnginePage):
         self.inject_audio_randomized_defense()
         self.inject_battery_defense()
         self.inject_webgl_fingerprint_per_domain()
-        self.inject_timezone_chicago_offset()
         self.inject_font_protection()
         self.inject_resize_observer_suppressor()
-        self.inject_stealth_storage_block()
         self.inject_hw_concurrency_spoof()
         self.inject_iframe_environment_harmonizer()
         self.inject_stealth_chrome_environment()
