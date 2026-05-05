@@ -2275,7 +2275,6 @@ class HardenedWebPage(QWebEnginePage):
         self._parent_view = view
         prof = self.profile()
         self.interceptor = getattr(prof, "_darkelf_interceptor", None)
-        self.inject_darkelf_letterboxing()
         self.hw_concurrency_spoof = secrets.choice([2, 4, 6, 8])
         self.inject_all_scripts()
 
@@ -2300,105 +2299,6 @@ class HardenedWebPage(QWebEnginePage):
         script_obj.setWorldId(QWebEngineScript.MainWorld)
         scripts.insert(script_obj)
         
-    def inject_darkelf_letterboxing(self):
-        script = """
-        (() => {
-
-            const detectPlatform = () => {
-                try {
-                    const p = navigator.platform.toLowerCase();
-                    if (p.includes('mac')) return 'mac';
-                    if (p.includes('win')) return 'windows';
-                    if (p.includes('linux')) return 'linux';
-                    return 'windows';
-                } catch (e) {
-                    return 'windows';
-                }
-            };
-
-            const personas = [
-                [1920,1080],
-                [1536,864],
-                [1440,900],
-                [1366,768],
-                [1280,720]
-            ];
-
-            const pickPersona = () => {
-                try {
-                    const p = personas[Math.floor(Math.random() * personas.length)];
-                    return { width: p[0], height: p[1] };
-                } catch(e) {
-                    return { width: 1920, height: 1080 };
-                }
-            };
-
-            const frameSizes = {
-                windows: 140,
-                mac: 80,
-                linux: 120
-            };
-
-            const persona = pickPersona();
-
-            const applyPatch = (win) => {
-                try {
-
-                    const platform = detectPlatform();
-                    const frame = frameSizes[platform] || 140;
-
-                    const width = persona.width;
-                    const height = persona.height;
-
-                    const safeDefine = (obj, key, getter) => {
-                        try {
-                            Object.defineProperty(obj, key, {
-                                get: getter,
-                                configurable: false
-                            });
-                        } catch(e) {}
-                    };
-
-                    safeDefine(win.screen, "width", () => width);
-                    safeDefine(win.screen, "height", () => height);
-                    safeDefine(win.screen, "availWidth", () => width);
-                    safeDefine(win.screen, "availHeight", () => height);
-
-                    safeDefine(win, "innerWidth", () => width);
-                    safeDefine(win, "innerHeight", () => height);
-
-                    safeDefine(win, "outerWidth", () => width);
-                    safeDefine(win, "outerHeight", () => height + frame);
-
-                } catch (e) {}
-            };
-
-            applyPatch(window);
-
-            new MutationObserver((muts) => {
-                for (const m of muts) {
-                    m.addedNodes.forEach((node) => {
-                        if (node.tagName === 'IFRAME') {
-                            try {
-                                const w = node.contentWindow;
-                                applyPatch(w);
-                            } catch (e) {}
-                        }
-                    });
-                }
-            }).observe(document, { childList: true, subtree: true });
-
-            console.log('[DarkelfAI] Darkelf Letterboxing persona applied.');
-
-        })();
-        """
-
-        self.inject_script(
-            script,
-            injection_point=QWebEngineScript.DocumentCreation,
-            subframes=True
-        )
-
     # --- Inject WebRTC block, geo override, and canvas noise all at DocumentCreation ---
     def stealth_webrtc_block(self):
         script = """
