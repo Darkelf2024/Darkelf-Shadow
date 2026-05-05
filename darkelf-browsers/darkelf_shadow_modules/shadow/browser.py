@@ -64,8 +64,8 @@ from shadow.utils import (
     BOOTUP_CANVAS_SEED
 )
 
-devnull = open(os.devnull, 'w')
-os.dup2(devnull.fileno(), sys.stderr.fileno())
+#devnull = open(os.devnull, 'w')
+#os.dup2(devnull.fileno(), sys.stderr.fileno())
 
 # --- Custom Icon helpers (ported from fixed2) ---
 def make_icon(color=None, size=24):
@@ -950,37 +950,7 @@ class HardenedWebPage(QWebEnginePage):
             script,
             injection_point=QWebEngineScript.DocumentCreation,
             subframes=True)
-            
-    def inject_timezone_chicago_offset(self):
-        script = """
-        (() => {
-            // Patch Date.prototype.getTimezoneOffset to always return 360 (UTC-6)
-            Object.defineProperty(Date.prototype, "getTimezoneOffset", {
-                value: function() { return 360; },
-                configurable: true
-            });
-            // Patch Intl.DateTimeFormat to always pretend timeZone is UTC
-            const origDTF = Intl.DateTimeFormat;
-            Intl.DateTimeFormat = function(locales, options) {
-                options = options || {};
-                options.timeZone = "UTC";
-                return origDTF.call(this, locales, options);
-            };
-            Intl.DateTimeFormat.prototype = origDTF.prototype;
-            // Patch navigator.timezone if present (rare)
-            if ('timezone' in navigator) {
-                Object.defineProperty(navigator, "timezone", {
-                    get: () => "UTC",
-                    configurable: true
-                });
-            }
-        })();
-        """
-        self.inject_script(
-            script,
-            injection_point=QWebEngineScript.DocumentCreation,
-            subframes=True)
-            
+                        
     def inject_webgl_fingerprint_per_domain(self):
         script = """
         (() => {
@@ -992,9 +962,8 @@ class HardenedWebPage(QWebEnginePage):
                 }
                 return h >>> 0;
             }
-
             const SEED = stringHash(location.hostname);
-
+            
             function seededRand(seed) {
                 let a = seed + 0x6D2B79F5;
                 a = Math.imul(a ^ a >>> 15, a | 1);
@@ -1002,75 +971,44 @@ class HardenedWebPage(QWebEnginePage):
                 return ((a ^ a >>> 14) >>> 0) / 4294967296;
             }
 
-            // 🔥 REALISTIC GPU PROFILES
-            const PLATFORM = navigator.platform.toLowerCase();
-
-            const PROFILES = {
-                mac: [
-                    {
-                        vendor: "Google Inc. (Apple)",
-                        renderer: "ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)"
-                    },
-                    {
-                        vendor: "Google Inc. (Apple)",
-                        renderer: "ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)"
-                    }
-                ],
-                win: [
-                    {
-                        vendor: "Google Inc. (Intel)",
-                        renderer: "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0)"
-                    },
-                    {
-                        vendor: "Google Inc. (NVIDIA)",
-                        renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0)"
-                    }
-                ],
-                linux: [
-                    {
-                        vendor: "Google Inc. (X.Org)",
-                        renderer: "ANGLE (AMD, AMD Radeon RX 580 (POLARIS10), OpenGL 4.6)"
-                    },
-                    {
-                        vendor: "Google Inc. (Mesa)",
-                        renderer: "ANGLE (Intel, Mesa Intel(R) UHD Graphics 620 (KBL GT2), OpenGL 4.6)"
-                    }
-                ]
-            };
-
-            function pickProfile() {
-                let list;
-
-                if (PLATFORM.includes("mac")) list = PROFILES.mac;
-                else if (PLATFORM.includes("win")) list = PROFILES.win;
-                else list = PROFILES.linux;
-
-                // deterministic per-domain but still realistic
-                return list[SEED % list.length];
+            function tweak(val, rn) {
+                if (typeof val === 'number')
+                    return (val + Math.round(rn * 8 - 4));
+                if (typeof val === 'string')
+                    return val.replace(/[A-Za-z0-9]/g, function(c) {
+                        return String.fromCharCode(c.charCodeAt(0) ^ (rn * 21 | 0));
+                    });
+                return val;
             }
-
-            const PROFILE = pickProfile();
 
             function patchWebGL(ctxName) {
                 let proto = window[ctxName] && window[ctxName].prototype;
                 if (!proto) return;
-
                 let _getParameter = proto.getParameter;
-
                 proto.getParameter = function(param) {
-                    switch (param) {
-                        case 37445: return PROFILE.vendor;   // UNMASKED_VENDOR_WEBGL
-                        case 37446: return PROFILE.renderer; // UNMASKED_RENDERER_WEBGL
-                        case 7936:  return PROFILE.vendor;   // VENDOR
-                        case 7937:  return PROFILE.renderer; // RENDERER
-                        case 35724: return "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)";
-                        case 7938:  return "WebGL 2.0 (OpenGL ES 3.0 Chromium)";
+                    // Vendor, Renderer, Shading language, version: randomize
+                    const SENSITIVE = [
+                        37445, // UNMASKED_VENDOR_WEBGL
+                        37446, // UNMASKED_RENDERER_WEBGL
+                        7936,  // VENDOR
+                        7937,  // RENDERER
+                        35724, // SHADING_LANGUAGE_VERSION
+                        7938,  // VERSION
+                    ];
+                    if (SENSITIVE.includes(param)) {
+                        let orig = _getParameter.apply(this, arguments);
+                        let r = seededRand(SEED + param);
+                        return tweak(orig, r);
                     }
-
+                    // Also randomize extensions returned
+                    if (typeof param === "string" && param.match(/_webgl|_renderer|_vendor|_version/i)) {
+                        let orig = _getParameter.apply(this, arguments);
+                        let r = seededRand(SEED + (param.length || 0));
+                        return tweak(orig, r);
+                    }
                     return _getParameter.apply(this, arguments);
                 };
             }
-
             patchWebGL('WebGLRenderingContext');
             patchWebGL('WebGL2RenderingContext');
         })();
@@ -1252,90 +1190,7 @@ class HardenedWebPage(QWebEnginePage):
         }, true);
         """
         self.inject_script(suppressor_js, name="__darkelf_resize_observer_patch__")
-        
-    def inject_stealth_storage_block(self):
-        # Memory-only storage shim: prevents crashes while avoiding persistence
-        script = r"""
-        (() => {
-          if (window.__darkelf_storage_shim) return;
-          window.__darkelf_storage_shim = true;
-
-          function makeMemoryStorage() {
-            const store = new Map();
-
-            const api = {
-              get length() { return store.size; },
-              key: (i) => Array.from(store.keys())[i] ?? null,
-              getItem: (k) => {
-                k = String(k);
-                return store.has(k) ? store.get(k) : null;
-              },
-              setItem: (k, v) => {
-                k = String(k);
-                v = String(v);
-                store.set(k, v);
-              },
-              removeItem: (k) => { store.delete(String(k)); },
-              clear: () => { store.clear(); }
-            };
-            return api;
-          }
-
-          const memLocal = makeMemoryStorage();
-          const memSession = makeMemoryStorage();
-
-          function def(obj, prop, value) {
-            try {
-              Object.defineProperty(obj, prop, {
-                get: () => value,
-                configurable: true
-              });
-            } catch(e) {}
-          }
-
-          // Provide storage objects so sites don't throw
-          try { def(window, "localStorage", memLocal); } catch(e) {}
-          try { def(window, "sessionStorage", memSession); } catch(e) {}
-
-          // Keep indexedDB disabled if you want (many sites survive without it)
-          try { Object.defineProperty(window, "indexedDB", { get: () => undefined, configurable: true }); } catch(e) {}
-          try { Object.defineProperty(window, "openDatabase", { get: () => undefined, configurable: true }); } catch(e) {}
-
-          // Storage events: optional noop
-          try {
-            window.addEventListener("storage", () => {}, true);
-          } catch(e) {}
-
-          // Iframe defense: apply same shim
-          const applyTo = (w) => {
-            try {
-              if (!w || w.__darkelf_storage_shim) return;
-              w.__darkelf_storage_shim = true;
-              try { def(w, "localStorage", makeMemoryStorage()); } catch(e) {}
-              try { def(w, "sessionStorage", makeMemoryStorage()); } catch(e) {}
-              try { Object.defineProperty(w, "indexedDB", { get: () => undefined, configurable: true }); } catch(e) {}
-              try { Object.defineProperty(w, "openDatabase", { get: () => undefined, configurable: true }); } catch(e) {}
-            } catch(e) {}
-          };
-
-          new MutationObserver((muts) => {
-            for (const m of muts) {
-              for (const node of m.addedNodes) {
-                if (node && node.tagName === "IFRAME") {
-                  try { applyTo(node.contentWindow); } catch(e) {}
-                  try { node.addEventListener("load", () => applyTo(node.contentWindow), { once: true }); } catch(e) {}
-                }
-              }
-            }
-          }).observe(document.documentElement || document, { childList: true, subtree: true });
-
-        })();
-        """
-        self.inject_script(
-            script,
-            injection_point=QWebEngineScript.DocumentCreation,
-            subframes=True)
-            
+                    
     def inject_hw_concurrency_spoof(self):
         script = """
         (() => {
@@ -1713,10 +1568,8 @@ class HardenedWebPage(QWebEnginePage):
         self.inject_audio_randomized_defense()
         self.inject_battery_defense()
         self.inject_webgl_fingerprint_per_domain()
-        self.inject_timezone_chicago_offset()
         self.inject_font_protection()
         self.inject_resize_observer_suppressor()
-        self.inject_stealth_storage_block()
         self.inject_hw_concurrency_spoof()
         self.inject_iframe_environment_harmonizer()
         self.inject_stealth_chrome_environment()
@@ -3234,3 +3087,4 @@ if __name__ == "__main__":
     worker.start()
 
     sys.exit(app.exec())
+    
