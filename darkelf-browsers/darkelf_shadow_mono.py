@@ -2690,8 +2690,9 @@ class HardenedWebPage(QWebEnginePage):
                 }
                 return h >>> 0;
             }
+
             const SEED = stringHash(location.hostname);
-            
+
             function seededRand(seed) {
                 let a = seed + 0x6D2B79F5;
                 a = Math.imul(a ^ a >>> 15, a | 1);
@@ -2699,44 +2700,75 @@ class HardenedWebPage(QWebEnginePage):
                 return ((a ^ a >>> 14) >>> 0) / 4294967296;
             }
 
-            function tweak(val, rn) {
-                if (typeof val === 'number')
-                    return (val + Math.round(rn * 8 - 4));
-                if (typeof val === 'string')
-                    return val.replace(/[A-Za-z0-9]/g, function(c) {
-                        return String.fromCharCode(c.charCodeAt(0) ^ (rn * 21 | 0));
-                    });
-                return val;
+            // 🔥 REALISTIC GPU PROFILES
+            const PLATFORM = navigator.platform.toLowerCase();
+
+            const PROFILES = {
+                mac: [
+                    {
+                        vendor: "Google Inc. (Apple)",
+                        renderer: "ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)"
+                    },
+                    {
+                        vendor: "Google Inc. (Apple)",
+                        renderer: "ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)"
+                    }
+                ],
+                win: [
+                    {
+                        vendor: "Google Inc. (Intel)",
+                        renderer: "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0)"
+                    },
+                    {
+                        vendor: "Google Inc. (NVIDIA)",
+                        renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0)"
+                    }
+                ],
+                linux: [
+                    {
+                        vendor: "Google Inc. (X.Org)",
+                        renderer: "ANGLE (AMD, AMD Radeon RX 580 (POLARIS10), OpenGL 4.6)"
+                    },
+                    {
+                        vendor: "Google Inc. (Mesa)",
+                        renderer: "ANGLE (Intel, Mesa Intel(R) UHD Graphics 620 (KBL GT2), OpenGL 4.6)"
+                    }
+                ]
+            };
+
+            function pickProfile() {
+                let list;
+
+                if (PLATFORM.includes("mac")) list = PROFILES.mac;
+                else if (PLATFORM.includes("win")) list = PROFILES.win;
+                else list = PROFILES.linux;
+
+                // deterministic per-domain but still realistic
+                return list[SEED % list.length];
             }
+
+            const PROFILE = pickProfile();
 
             function patchWebGL(ctxName) {
                 let proto = window[ctxName] && window[ctxName].prototype;
                 if (!proto) return;
+
                 let _getParameter = proto.getParameter;
+
                 proto.getParameter = function(param) {
-                    // Vendor, Renderer, Shading language, version: randomize
-                    const SENSITIVE = [
-                        37445, // UNMASKED_VENDOR_WEBGL
-                        37446, // UNMASKED_RENDERER_WEBGL
-                        7936,  // VENDOR
-                        7937,  // RENDERER
-                        35724, // SHADING_LANGUAGE_VERSION
-                        7938,  // VERSION
-                    ];
-                    if (SENSITIVE.includes(param)) {
-                        let orig = _getParameter.apply(this, arguments);
-                        let r = seededRand(SEED + param);
-                        return tweak(orig, r);
+                    switch (param) {
+                        case 37445: return PROFILE.vendor;   // UNMASKED_VENDOR_WEBGL
+                        case 37446: return PROFILE.renderer; // UNMASKED_RENDERER_WEBGL
+                        case 7936:  return PROFILE.vendor;   // VENDOR
+                        case 7937:  return PROFILE.renderer; // RENDERER
+                        case 35724: return "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)";
+                        case 7938:  return "WebGL 2.0 (OpenGL ES 3.0 Chromium)";
                     }
-                    // Also randomize extensions returned
-                    if (typeof param === "string" && param.match(/_webgl|_renderer|_vendor|_version/i)) {
-                        let orig = _getParameter.apply(this, arguments);
-                        let r = seededRand(SEED + (param.length || 0));
-                        return tweak(orig, r);
-                    }
+
                     return _getParameter.apply(this, arguments);
                 };
             }
+
             patchWebGL('WebGLRenderingContext');
             patchWebGL('WebGL2RenderingContext');
         })();
