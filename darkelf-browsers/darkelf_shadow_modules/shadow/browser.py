@@ -64,8 +64,8 @@ from shadow.utils import (
     BOOTUP_CANVAS_SEED
 )
 
-#devnull = open(os.devnull, 'w')
-#os.dup2(devnull.fileno(), sys.stderr.fileno())
+devnull = open(os.devnull, 'w')
+os.dup2(devnull.fileno(), sys.stderr.fileno())
 
 # --- Custom Icon helpers (ported from fixed2) ---
 def make_icon(color=None, size=24):
