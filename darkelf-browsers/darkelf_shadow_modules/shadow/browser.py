@@ -1428,37 +1428,6 @@ class HardenedWebPage(QWebEnginePage):
             subframes=True
         )
         
-    def inject_global_chrome_spoof(self):
-        script = """
-        (() => {
-            try {
-                const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
-
-                Object.defineProperty(navigator, "userAgent", {
-                    get: () => UA,
-                    configurable: true
-                });
-
-                Object.defineProperty(navigator, "appVersion", {
-                    get: () => UA,
-                    configurable: true
-                });
-
-                Object.defineProperty(navigator, "vendor", {
-                    get: () => "Google Inc.",
-                    configurable: true
-                });
-
-            } catch(e) {}
-        })();
-        """
-
-        self.inject_script(
-            script,
-            injection_point=QWebEngineScript.DocumentCreation,
-            subframes=True
-        )
-        
     def inject_all_scripts(self):
         self.stealth_webrtc_block()
         self.block_webrtc_sdp_logging()
@@ -1473,7 +1442,6 @@ class HardenedWebPage(QWebEnginePage):
         self.inject_hw_concurrency_spoof()
         self.inject_iframe_environment_harmonizer()
         self.inject_stealth_chrome_environment()
-        self.inject_global_chrome_spoof()
         self.inject_youtube_js_spoof()
 
     def acceptNavigationRequest(self, url, navtype, isMainFrame):
@@ -2936,12 +2904,6 @@ if __name__ == "__main__":
     profile.setHttpCacheType(QWebEngineProfile.MemoryHttpCache)
     profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
     profile.setHttpAcceptLanguage("en-US,en;q=0.9")
-
-    profile.setHttpUserAgent(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/140.0.0.0 Safari/537.36"
-    )
 
     settings = profile.settings()
     settings.setAttribute(QWebEngineSettings.LocalStorageEnabled, True)
