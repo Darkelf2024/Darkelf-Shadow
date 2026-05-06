@@ -298,8 +298,6 @@ def boot_done(ai):
     
 system = platform.system()
 
-# --- Coherent platform selection ---
-
 if system == "Darwin":
     platform_part = "Macintosh; Intel Mac OS X 10_15_7"
 
@@ -322,7 +320,6 @@ WEBKIT_UA = (
     b"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     b"AppleWebKit/605.1.15 (KHTML, like Gecko)"
 )
-
             
 def run_shadow():
     return "ok"
@@ -3176,7 +3173,66 @@ class HardenedWebPage(QWebEnginePage):
             injection_point=QWebEngineScript.DocumentCreation,
             subframes=True
         )
-                        
+        
+    def inject_global_chrome_spoof(self):
+        system = platform.system()
+
+        if system == "Darwin":
+            platform_part = "Macintosh; Intel Mac OS X 10_15_7"
+
+        elif system == "Windows":
+            platform_part = "Windows NT 10.0; Win64; x64"
+
+        elif system == "Linux":
+            platform_part = "X11; Linux x86_64"
+
+        else:
+            platform_part = "X11; Linux x86_64"
+
+        chrome_ua = (
+            f"Mozilla/5.0 ({platform_part}) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/140.0.0.0 Safari/537.36"
+        )
+
+        # IMPORTANT:
+        self.profile().setHttpUserAgent(chrome_ua)
+
+        script = f"""
+        (() => {{
+            try {{
+                const UA = "{chrome_ua}";
+
+                Object.defineProperty(navigator, "userAgent", {{
+                    get: () => UA,
+                    configurable: true
+                }});
+
+                Object.defineProperty(navigator, "appVersion", {{
+                    get: () => UA,
+                    configurable: true
+                }});
+
+                Object.defineProperty(navigator, "vendor", {{
+                    get: () => "Google Inc.",
+                    configurable: true
+                }});
+
+                Object.defineProperty(navigator, "platform", {{
+                    get: () => "{platform_part}",
+                    configurable: true
+                }});
+
+            }} catch(e) {{}}
+        }})();
+        """
+
+        self.inject_script(
+            script,
+            injection_point=QWebEngineScript.DocumentCreation,
+            subframes=True
+        )
+        
     def inject_all_scripts(self):
         self.stealth_webrtc_block()
         self.block_webrtc_sdp_logging()
@@ -3192,6 +3248,7 @@ class HardenedWebPage(QWebEnginePage):
         self.inject_iframe_environment_harmonizer()
         self.inject_stealth_chrome_environment()
         self.inject_youtube_js_spoof()
+        self.inject_global_chrome_spoof()
 
     def acceptNavigationRequest(self, url, navtype, isMainFrame):
         if url.scheme() == "file":
