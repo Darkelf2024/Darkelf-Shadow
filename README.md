@@ -1,7 +1,7 @@
 # 🕶️ Darkelf Shadow
 
 <p align="center">
-  <img src="https://github.com/Darkelf2024/Darkelf-Quantum-Browser/blob/main/Quantum_Home.png"
+  <img src="https://github.com/Darkelf2024/Darkelf-Shadow/blob/main/shadow_home.png"
        alt="Darkelf Quantum Browser"
        width="900">
 </p>
