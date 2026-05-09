@@ -1,5 +1,11 @@
 # 🕶️ Darkelf Shadow
 
+<p align="center">
+  <img src="https://github.com/Darkelf2024/Darkelf-Quantum-Browser/blob/main/Quantum_Home.png"
+       alt="Darkelf Quantum Browser"
+       width="900">
+</p>
+
 **Fully Hardened • Ephemeral • Zero-Trace Browser (Qt WebEngine / Chromium Core)**
 
 Darkelf Shadow is a defense-in-depth, privacy-hardened web browser engineered to eliminate persistent tracking, reduce attack surface, and actively defend against modern web threats — all while operating entirely in-memory.
