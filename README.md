@@ -195,6 +195,13 @@ For maximum protection, combine Darkelf Shadow with:
 
 ---
 
+## 📦 PyPI
+
+```bash
+pip install darkelf-shadow
+darkelf-shadow
+```
+
 ## 📜 LICENSE
 
 Licensed under **LGPL-3.0-or-later**
