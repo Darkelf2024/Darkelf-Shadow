@@ -8,7 +8,7 @@
 
 **Fully Hardened • Ephemeral • Zero-Trace Browser (Qt WebEngine / Chromium Core)**
 
-Darkelf Shadow v4.4.1 is a defense-in-depth, privacy-hardened web browser engineered to eliminate persistent tracking, reduce attack surface, and actively defend against modern web threats — all while operating entirely in-memory.
+Darkelf Shadow v4.4.3 is a defense-in-depth, privacy-hardened web browser engineered to eliminate persistent tracking, reduce attack surface, and actively defend against modern web threats — all while operating entirely in-memory.
 
 ---
 
