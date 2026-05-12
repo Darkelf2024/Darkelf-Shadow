@@ -1911,11 +1911,6 @@ class DarkelfBrowser(QMainWindow):
         QApplication.instance().aboutToQuit.connect(self._wipe_download_traces)
 
         # -----------------------------
-        # HOTKEYS
-        # -----------------------------
-        self.setup_hotkeys()
-
-        # -----------------------------
         # MINI AI TIMER
         # -----------------------------
         self.miniai_timer = QTimer()
@@ -2821,7 +2816,44 @@ class DarkelfBrowser(QMainWindow):
         # reopen homepage if all tabs closed
         if self.tabs.count() == 0:
             self._add_tab(home=True)
+            
+        # Use Ctrl + w,t,r
+    def keyPressEvent(self, event):
 
+        mods = event.modifiers()
+        key = event.key()
+
+        # macOS Command shortcuts
+        if mods & Qt.KeyboardModifier.MetaModifier:
+
+            # New tab
+            if key == Qt.Key.Key_T:
+                self.new_tab()
+                event.accept()
+                return
+
+            # Close tab
+            elif key == Qt.Key.Key_W:
+                self.close_tab(self.tabs.currentIndex())
+                event.accept()
+                return
+
+            # Reload
+            elif key == Qt.Key.Key_R:
+                self.reload_page()
+                event.accept()
+                return
+                
+            # Snapshot Ctrl + shift + s
+            elif key == Qt.Key.Key_S and (
+                mods & Qt.KeyboardModifier.ShiftModifier
+            ):
+                self.take_snapshot()
+                event.accept()
+                return
+
+        super().keyPressEvent(event)
+        
     def take_snapshot(self):
         view = self.tabs.currentWidget()
         if not view:
@@ -2849,57 +2881,6 @@ class DarkelfBrowser(QMainWindow):
         self.debounce_cleanup
 
         print(f"[Darkelf] Snapshot saved → {path}")
-        
-    def setup_hotkeys(self):
-
-        # New tab
-        new_tab_action = QAction(self)
-        new_tab_action.setShortcut("Ctrl+T")
-        new_tab_action.triggered.connect(self.new_tab)
-        self.addAction(new_tab_action)
-
-        # Close tab
-        close_tab_action = QAction(self)
-        close_tab_action.setShortcut("Ctrl+W")
-        close_tab_action.triggered.connect(self.close_tab)
-        self.addAction(close_tab_action)
-
-        # Reload
-        reload_action = QAction(self)
-        reload_action.setShortcut("Ctrl+R")
-        reload_action.triggered.connect(self.reload_page)
-        self.addAction(reload_action)
-
-        # Focus URL
-        focus_url_action = QAction(self)
-        focus_url_action.setShortcut("Ctrl+L")
-        focus_url_action.triggered.connect(lambda: self.url_bar.setFocus())
-
-        # Next tab
-        next_tab_action = QAction(self)
-        next_tab_action.setShortcut("Ctrl+Tab")
-        next_tab_action.triggered.connect(
-            lambda: self.tabs.setCurrentIndex(
-                (self.tabs.currentIndex() + 1) % self.tabs.count()
-            )
-        )
-        self.addAction(next_tab_action)
-
-        # Previous tab
-        prev_tab_action = QAction(self)
-        prev_tab_action.setShortcut("Ctrl+Shift+Tab")
-        prev_tab_action.triggered.connect(
-            lambda: self.tabs.setCurrentIndex(
-                (self.tabs.currentIndex() - 1) % self.tabs.count()
-            )
-        )
-        self.addAction(prev_tab_action)
-        
-        # Snapshot
-        snapshot_action = QAction(self)
-        snapshot_action.setShortcuts(["Ctrl+Shift+S", "Meta+Shift+S"])
-        snapshot_action.triggered.connect(self.take_snapshot)
-        self.addAction(snapshot_action)
         
     def _cleanup_webengine(self):
         # Close tabs from last to first
@@ -3179,3 +3160,4 @@ if __name__ == "__main__":
     worker.start()
 
     sys.exit(app.exec())
+
