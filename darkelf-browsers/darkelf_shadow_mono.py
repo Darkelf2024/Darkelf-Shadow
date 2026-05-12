@@ -1,5 +1,5 @@
 """
-# Darkelf Shadow Browser v4.3.8
+# Darkelf Shadow Browser v4.4.4
 Ephemeral, Privacy-Focused Web Browser (Qt / WebEngine Build)
 
 Copyright (C) 2025 Dr. Kevin Moore
@@ -3807,11 +3807,28 @@ class DarkelfBrowser(QMainWindow):
     def _build_threat_report_html(self):
 
         stats = self.mini_ai.get_statistics()
-        
-        recent_upgrades = [
-            e for e in self.mini_ai.events
-            if "HTTP_AUTO_UPGRADE" in e.get("threats", [])
-        ][-5:]
+
+        base = QColor(self.accent_color)
+
+        accent  = base.name()
+        accent2 = base.lighter(130).name()
+        accent3 = base.darker(130).name()
+
+        accent_rgba  = f"rgba({base.red()}, {base.green()}, {base.blue()}, .45)"
+
+        accent2_rgba = (
+            f"rgba({base.lighter(130).red()}, "
+            f"{base.lighter(130).green()}, "
+            f"{base.lighter(130).blue()}, .40)"
+        )
+
+        accent3_rgba = (
+            f"rgba({base.darker(130).red()}, "
+            f"{base.darker(130).green()}, "
+            f"{base.darker(130).blue()}, .45)"
+        )
+
+        grid_rgba = f"rgba({base.red()}, {base.green()}, {base.blue()}, .18)"
 
         return f"""
     <!DOCTYPE html>
@@ -3842,9 +3859,9 @@ class DarkelfBrowser(QMainWindow):
 
     :root {{
     --bg:#05060a;
-    --accent:#36ff9a;
-    --accent2:#00eaff;
-    --accent3:#b400ff;
+    --accent:{accent};
+    --accent2:{accent2};
+    --accent3:{accent3};
     --danger:#ff3b30;
     --warn:#ffd36b;
     --muted:#9db0be;
@@ -3856,10 +3873,20 @@ class DarkelfBrowser(QMainWindow):
 
     body{{
     background:
-    radial-gradient(1200px 800px at 15% -10%, rgba(0,234,255,.35), transparent 70%),
-    radial-gradient(900px 600px at 110% 0%, rgba(54,255,154,.35), transparent 70%),
-    radial-gradient(1200px 700px at 50% 120%, rgba(180,0,255,.35), transparent 70%),
+    radial-gradient(1200px 800px at 15% -10%,
+    {accent_rgba},
+    transparent 70%),
+
+    radial-gradient(900px 600px at 110% 0%,
+    {accent2_rgba},
+    transparent 70%),
+
+    radial-gradient(1200px 700px at 50% 120%,
+    {accent3_rgba},
+    transparent 70%),
+
     var(--bg);
+
     color:#eef2f6;
     }}
 
@@ -3867,12 +3894,22 @@ class DarkelfBrowser(QMainWindow):
     content:"";
     position:fixed;
     inset:0;
+
     background:
-    linear-gradient(rgba(0,255,180,.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0,255,180,.05) 1px, transparent 1px);
+    linear-gradient(
+    {grid_rgba} 1px,
+    transparent 1px
+    ),
+
+    linear-gradient(
+    90deg,
+    {grid_rgba} 1px,
+    transparent 1px
+    );
+
     background-size:40px 40px;
     pointer-events:none;
-    opacity:.3;
+    opacity:.22;
     }}
 
     .scanline {{
@@ -3918,9 +3955,9 @@ class DarkelfBrowser(QMainWindow):
     border-radius:50%;
     }}
 
-    .green {{background:#36ff9a;box-shadow:0 0 10px #36ff9a}}
-    .cyan {{background:#00eaff;box-shadow:0 0 10px #00eaff}}
-    .purple {{background:#b400ff;box-shadow:0 0 10px #b400ff}}
+    .green {{background:var(--accent)}}
+    .cyan {{background:var(--accent2)}}
+    .purple {{background:var(--accent3)}}
 
     .badge {{
     display:inline-flex;
@@ -3964,7 +4001,7 @@ class DarkelfBrowser(QMainWindow):
     padding:40px;
     border-radius:18px;
     border:1px solid rgba(255,255,255,.08);
-    box-shadow:0 30px 60px rgba(0,0,0,.6),0 0 40px rgba(0,234,255,.15);
+    box-shadow:0 0 40px {accent2_rgba};
     }}
 
     .section-title {{
