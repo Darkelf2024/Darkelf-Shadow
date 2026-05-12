@@ -1,5 +1,5 @@
 """
-# Darkelf Shadow Browser v4.4.4
+# Darkelf Shadow Browser v4.4.5
 Ephemeral, Privacy-Focused Web Browser (Qt / WebEngine Build)
 
 Copyright (C) 2025 Dr. Kevin Moore
@@ -172,7 +172,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import (
     QAction, QIcon, QPixmap, QPainter, QColor,
     QPalette, QPen, QBrush, QPolygonF,
-    QPainterPath, QFont
+    QPainterPath, QFont, QShortcut, QKeySequence
 )
 
 # -------------------- PySide6 WebEngine --------------------
@@ -191,8 +191,8 @@ from PySide6.QtNetwork import (
 # -------------------- Config --------------------
 QNetworkProxyFactory.setUseSystemConfiguration(True)
 
-devnull = open(os.devnull, 'w')
-os.dup2(devnull.fileno(), sys.stderr.fileno())
+#devnull = open(os.devnull, 'w')
+#os.dup2(devnull.fileno(), sys.stderr.fileno())
 
 # ------------------ SPLASH ------------------
 
@@ -373,14 +373,14 @@ BOOTUP_CANVAS_SEED = secrets.randbits(32) & 0xFFFFFFFF
 DUCK_LITE_HTTPS = "https://duckduckgo.com/lite/"
 MUTE_LOGS_AFTER_BOOT_MS = 0
 
-existing = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
+#existing = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
 
-os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = existing + (
-    " --disable-sync"
-    " --metrics-recording-only"
-    " --no-first-run"
-    " --disable-breakpad"
-)
+#os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = existing + (
+#    " --disable-sync"
+#    " --metrics-recording-only"
+#    " --no-first-run"
+ #   " --disable-breakpad"
+#)
 
 EASYLIST_URLS = [
     # Core
@@ -3531,11 +3531,6 @@ class DarkelfBrowser(QMainWindow):
         self._hook_secure_downloads()
 
         QApplication.instance().aboutToQuit.connect(self._wipe_download_traces)
-
-        # -----------------------------
-        # Hotkeys
-        # -----------------------------
-        self.setup_hotkeys()
         
         #----------------------------
         # Timer For Darkelf MiniAI
@@ -4443,6 +4438,43 @@ class DarkelfBrowser(QMainWindow):
         if self.tabs.count() == 0:
             self._add_tab(home=True)
 
+    def keyPressEvent(self, event):
+
+        mods = event.modifiers()
+        key = event.key()
+
+        # macOS Command shortcuts
+        if mods & Qt.KeyboardModifier.MetaModifier:
+
+            # New tab
+            if key == Qt.Key.Key_T:
+                self.new_tab()
+                event.accept()
+                return
+
+            # Close tab
+            elif key == Qt.Key.Key_W:
+                self.close_tab(self.tabs.currentIndex())
+                event.accept()
+                return
+
+            # Reload
+            elif key == Qt.Key.Key_R:
+                self.reload_page()
+                event.accept()
+                return
+                
+            # Snapshot
+            elif key == Qt.Key.Key_S and (
+                mods & Qt.KeyboardModifier.ShiftModifier
+            ):
+                self.take_snapshot()
+                event.accept()
+                return
+
+        super().keyPressEvent(event)
+
+
     def take_snapshot(self):
         view = self.tabs.currentWidget()
         if not view:
@@ -4470,58 +4502,7 @@ class DarkelfBrowser(QMainWindow):
         self.debounce_cleanup
 
         print(f"[Darkelf] Snapshot saved → {path}")
-        
-    def setup_hotkeys(self):
-
-        # New tab
-        new_tab_action = QAction(self)
-        new_tab_action.setShortcut("Ctrl+T")
-        new_tab_action.triggered.connect(self.new_tab)
-        self.addAction(new_tab_action)
-
-        # Close tab
-        close_tab_action = QAction(self)
-        close_tab_action.setShortcut("Ctrl+W")
-        close_tab_action.triggered.connect(self.close_tab)
-        self.addAction(close_tab_action)
-
-        # Reload
-        reload_action = QAction(self)
-        reload_action.setShortcut("Ctrl+R")
-        reload_action.triggered.connect(self.reload_page)
-        self.addAction(reload_action)
-
-        # Focus URL
-        focus_url_action = QAction(self)
-        focus_url_action.setShortcut("Ctrl+L")
-        focus_url_action.triggered.connect(lambda: self.url_bar.setFocus())
-
-        # Next tab
-        next_tab_action = QAction(self)
-        next_tab_action.setShortcut("Ctrl+Tab")
-        next_tab_action.triggered.connect(
-            lambda: self.tabs.setCurrentIndex(
-                (self.tabs.currentIndex() + 1) % self.tabs.count()
-            )
-        )
-        self.addAction(next_tab_action)
-
-        # Previous tab
-        prev_tab_action = QAction(self)
-        prev_tab_action.setShortcut("Ctrl+Shift+Tab")
-        prev_tab_action.triggered.connect(
-            lambda: self.tabs.setCurrentIndex(
-                (self.tabs.currentIndex() - 1) % self.tabs.count()
-            )
-        )
-        self.addAction(prev_tab_action)
-        
-        # Snapshot
-        snapshot_action = QAction(self)
-        snapshot_action.setShortcuts(["Ctrl+Shift+S", "Meta+Shift+S"])
-        snapshot_action.triggered.connect(self.take_snapshot)
-        self.addAction(snapshot_action)
-        
+                
     def _cleanup_webengine(self):
         # Close tabs from last to first
         for i in reversed(range(self.tabs.count())):
