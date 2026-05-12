@@ -34,7 +34,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QAction, QIcon, QPixmap, QPainter, QColor,
     QPalette, QPen, QBrush, QPolygonF,
-    QPainterPath, QFont
+    QPainterPath, QFont, QKeySequence
 )
 
 # --- Qt Widgets ---
@@ -1856,7 +1856,7 @@ class DarkelfBrowser(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.setTabsClosable(True)
         self.tabs.setMovable(True)
-        self.tabs.setDocumentMode(True)  # 🔥 IMPORTANT
+        self.tabs.setDocumentMode(False)  # 🔥 IMPORTANT
 
         self.tabs.tabCloseRequested.connect(self.close_tab)
 
@@ -1888,7 +1888,7 @@ class DarkelfBrowser(QMainWindow):
         container.setLayout(layout)
 
         self.setCentralWidget(container)
-
+        
         # -----------------------------
         # STYLING
         # -----------------------------
@@ -1900,7 +1900,9 @@ class DarkelfBrowser(QMainWindow):
         # -----------------------------
         QApplication.instance().aboutToQuit.connect(self._cleanup_webengine)
         self._add_tab(home=True)
-
+        
+        self.setup_hotkeys()
+        
         # -----------------------------
         # DOWNLOADS
         # -----------------------------
@@ -2702,6 +2704,8 @@ class DarkelfBrowser(QMainWindow):
         canvas_seed = tab_seed ^ BOOTUP_CANVAS_SEED
 
         view = QWebEngineView(self)
+        view.setFocusPolicy(Qt.StrongFocus)
+        view.installEventFilter(self)
         view._profile = profile
         
         page = HardenedWebPage(view, profile, canvas_seed=canvas_seed)
@@ -2743,6 +2747,8 @@ class DarkelfBrowser(QMainWindow):
 
         idx = self.tabs.addTab(view, "New Tab")
         self.tabs.setCurrentIndex(idx)
+
+        view.setFocus()
 
         view.urlChanged.connect(self._sync_urlbar)
 
@@ -2817,42 +2823,112 @@ class DarkelfBrowser(QMainWindow):
         if self.tabs.count() == 0:
             self._add_tab(home=True)
             
-        # Use Ctrl + w,t,r
-    def keyPressEvent(self, event):
+    def setup_hotkeys(self):
 
-        mods = event.modifiers()
-        key = event.key()
+        # --------------------------------
+        # Shared shortcut context fix
+        # --------------------------------
+        shortcut_context = Qt.WindowShortcut
 
-        # macOS Command shortcuts
-        if mods & Qt.KeyboardModifier.MetaModifier:
+        # --------------------------------
+        # Ctrl+T -> New tab
+        # --------------------------------
+        new_tab_action = QAction(self)
 
-            # New tab
-            if key == Qt.Key.Key_T:
-                self.new_tab()
-                event.accept()
-                return
+        new_tab_action.setShortcut(
+            QKeySequence("Ctrl+T")
+        )
 
-            # Close tab
-            elif key == Qt.Key.Key_W:
-                self.close_tab(self.tabs.currentIndex())
-                event.accept()
-                return
+        new_tab_action.setShortcutContext(
+            shortcut_context
+        )
 
-            # Reload
-            elif key == Qt.Key.Key_R:
-                self.reload_page()
-                event.accept()
-                return
-                
-            # Snapshot Ctrl + shift + s
-            elif key == Qt.Key.Key_S and (
-                mods & Qt.KeyboardModifier.ShiftModifier
-            ):
-                self.take_snapshot()
-                event.accept()
-                return
+        new_tab_action.triggered.connect(
+            self.new_tab
+        )
 
-        super().keyPressEvent(event)
+        self.addAction(new_tab_action)
+
+        # --------------------------------
+        # Ctrl+W -> Close current tab
+        # --------------------------------
+        close_tab_action = QAction(self)
+
+        close_tab_action.setShortcut(
+            QKeySequence("Ctrl+W")
+        )
+
+        close_tab_action.setShortcutContext(
+            shortcut_context
+        )
+
+        close_tab_action.triggered.connect(
+            lambda: self.close_tab(
+                self.tabs.currentIndex()
+            )
+        )
+
+        self.addAction(close_tab_action)
+
+        # --------------------------------
+        # Ctrl+R -> Reload
+        # --------------------------------
+        reload_action = QAction(self)
+
+        reload_action.setShortcut(
+            QKeySequence("Ctrl+R")
+        )
+
+        reload_action.setShortcutContext(
+            shortcut_context
+        )
+
+        reload_action.triggered.connect(
+            self.reload_page
+        )
+
+        self.addAction(reload_action)
+
+        # --------------------------------
+        # Ctrl+L -> Focus URL bar
+        # --------------------------------
+        focus_action = QAction(self)
+
+        focus_action.setShortcut(
+            QKeySequence("Ctrl+L")
+        )
+
+        focus_action.setShortcutContext(
+            shortcut_context
+        )
+
+        focus_action.triggered.connect(
+            lambda: (
+                self.addr.setFocus(),
+                self.addr.selectAll()
+            )
+        )
+
+        self.addAction(focus_action)
+
+        # --------------------------------
+        # Ctrl+Shift+S -> Snapshot
+        # --------------------------------
+        snapshot_action = QAction(self)
+
+        snapshot_action.setShortcut(
+            QKeySequence("Ctrl+Shift+S")
+        )
+
+        snapshot_action.setShortcutContext(
+            shortcut_context
+        )
+
+        snapshot_action.triggered.connect(
+            self.take_snapshot
+        )
+
+        self.addAction(snapshot_action)
         
     def take_snapshot(self):
         view = self.tabs.currentWidget()
@@ -2881,7 +2957,7 @@ class DarkelfBrowser(QMainWindow):
         self.debounce_cleanup
 
         print(f"[Darkelf] Snapshot saved → {path}")
-        
+                
     def _cleanup_webengine(self):
         # Close tabs from last to first
         for i in reversed(range(self.tabs.count())):
