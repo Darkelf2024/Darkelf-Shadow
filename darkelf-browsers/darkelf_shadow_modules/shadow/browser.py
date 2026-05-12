@@ -60,14 +60,13 @@ from shadow.utils import (
     should_rotate,
     rotate_internal_seed,
     _safe_download_dir,
-    _randomized_filename,
     sanitize_url_clearurls,
     DUCK_LITE_HTTPS,
     BOOTUP_CANVAS_SEED
 )
 
-#devnull = open(os.devnull, 'w')
-#os.dup2(devnull.fileno(), sys.stderr.fileno())
+devnull = open(os.devnull, 'w')
+os.dup2(devnull.fileno(), sys.stderr.fileno())
 
 # --- Custom Icon helpers (ported from fixed2) ---
 def make_icon(color=None, size=24):
@@ -579,6 +578,7 @@ class HardenedWebPage(QWebEnginePage):
         self._parent_view = view
         prof = self.profile()
         self.interceptor = getattr(prof, "_darkelf_interceptor", None)
+        self.inject_darkelf_letterboxing()
         self.hw_concurrency_spoof = secrets.choice([2, 4, 6, 8])
         self.inject_all_scripts()
 
@@ -603,6 +603,104 @@ class HardenedWebPage(QWebEnginePage):
         script_obj.setWorldId(QWebEngineScript.MainWorld)
         scripts.insert(script_obj)
         
+    def inject_darkelf_letterboxing(self):
+        script = """
+        (() => {
+
+            const detectPlatform = () => {
+                try {
+                    const p = navigator.platform.toLowerCase();
+                    if (p.includes('mac')) return 'mac';
+                    if (p.includes('win')) return 'windows';
+                    if (p.includes('linux')) return 'linux';
+                    return 'windows';
+                } catch (e) {
+                    return 'windows';
+                }
+            };
+
+            const personas = [
+                [1920,1080],
+                [1536,864],
+                [1440,900],
+                [1366,768],
+                [1280,720]
+            ];
+
+            const pickPersona = () => {
+                try {
+                    const p = personas[Math.floor(Math.random() * personas.length)];
+                    return { width: p[0], height: p[1] };
+                } catch(e) {
+                    return { width: 1920, height: 1080 };
+                }
+            };
+
+            const frameSizes = {
+                windows: 140,
+                mac: 80,
+                linux: 120
+            };
+
+            const persona = pickPersona();
+
+            const applyPatch = (win) => {
+                try {
+
+                    const platform = detectPlatform();
+                    const frame = frameSizes[platform] || 140;
+
+                    const width = persona.width;
+                    const height = persona.height;
+
+                    const safeDefine = (obj, key, getter) => {
+                        try {
+                            Object.defineProperty(obj, key, {
+                                get: getter,
+                                configurable: false
+                            });
+                        } catch(e) {}
+                    };
+
+                    safeDefine(win.screen, "width", () => width);
+                    safeDefine(win.screen, "height", () => height);
+                    safeDefine(win.screen, "availWidth", () => width);
+                    safeDefine(win.screen, "availHeight", () => height);
+
+                    safeDefine(win, "innerWidth", () => width);
+                    safeDefine(win, "innerHeight", () => height);
+
+                    safeDefine(win, "outerWidth", () => width);
+                    safeDefine(win, "outerHeight", () => height + frame);
+
+                } catch (e) {}
+            };
+
+            applyPatch(window);
+
+            new MutationObserver((muts) => {
+                for (const m of muts) {
+                    m.addedNodes.forEach((node) => {
+                        if (node.tagName === 'IFRAME') {
+                            try {
+                                const w = node.contentWindow;
+                                applyPatch(w);
+                            } catch (e) {}
+                        }
+                    });
+                }
+            }).observe(document, { childList: true, subtree: true });
+
+            console.log('[DarkelfAI] Darkelf Letterboxing persona applied.');
+
+        })();
+        """
+
+        self.inject_script(
+            script,
+            injection_point=QWebEngineScript.DocumentCreation,
+            subframes=True
+        )
 
     # --- Inject WebRTC block, geo override, and canvas noise all at DocumentCreation ---
     def stealth_webrtc_block(self):
@@ -2088,11 +2186,28 @@ class DarkelfBrowser(QMainWindow):
     def _build_threat_report_html(self):
 
         stats = self.mini_ai.get_statistics()
-        
-        recent_upgrades = [
-            e for e in self.mini_ai.events
-            if "HTTP_AUTO_UPGRADE" in e.get("threats", [])
-        ][-5:]
+
+        base = QColor(self.accent_color)
+
+        accent  = base.name()
+        accent2 = base.lighter(130).name()
+        accent3 = base.darker(130).name()
+
+        accent_rgba  = f"rgba({base.red()}, {base.green()}, {base.blue()}, .45)"
+
+        accent2_rgba = (
+            f"rgba({base.lighter(130).red()}, "
+            f"{base.lighter(130).green()}, "
+            f"{base.lighter(130).blue()}, .40)"
+        )
+
+        accent3_rgba = (
+            f"rgba({base.darker(130).red()}, "
+            f"{base.darker(130).green()}, "
+            f"{base.darker(130).blue()}, .45)"
+        )
+
+        grid_rgba = f"rgba({base.red()}, {base.green()}, {base.blue()}, .18)"
 
         return f"""
     <!DOCTYPE html>
@@ -2123,9 +2238,9 @@ class DarkelfBrowser(QMainWindow):
 
     :root {{
     --bg:#05060a;
-    --accent:#36ff9a;
-    --accent2:#00eaff;
-    --accent3:#b400ff;
+    --accent:{accent};
+    --accent2:{accent2};
+    --accent3:{accent3};
     --danger:#ff3b30;
     --warn:#ffd36b;
     --muted:#9db0be;
@@ -2137,10 +2252,20 @@ class DarkelfBrowser(QMainWindow):
 
     body{{
     background:
-    radial-gradient(1200px 800px at 15% -10%, rgba(0,234,255,.35), transparent 70%),
-    radial-gradient(900px 600px at 110% 0%, rgba(54,255,154,.35), transparent 70%),
-    radial-gradient(1200px 700px at 50% 120%, rgba(180,0,255,.35), transparent 70%),
+    radial-gradient(1200px 800px at 15% -10%,
+    {accent_rgba},
+    transparent 70%),
+
+    radial-gradient(900px 600px at 110% 0%,
+    {accent2_rgba},
+    transparent 70%),
+
+    radial-gradient(1200px 700px at 50% 120%,
+    {accent3_rgba},
+    transparent 70%),
+
     var(--bg);
+
     color:#eef2f6;
     }}
 
@@ -2148,12 +2273,22 @@ class DarkelfBrowser(QMainWindow):
     content:"";
     position:fixed;
     inset:0;
+
     background:
-    linear-gradient(rgba(0,255,180,.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0,255,180,.05) 1px, transparent 1px);
+    linear-gradient(
+    {grid_rgba} 1px,
+    transparent 1px
+    ),
+
+    linear-gradient(
+    90deg,
+    {grid_rgba} 1px,
+    transparent 1px
+    );
+
     background-size:40px 40px;
     pointer-events:none;
-    opacity:.3;
+    opacity:.22;
     }}
 
     .scanline {{
@@ -2199,9 +2334,9 @@ class DarkelfBrowser(QMainWindow):
     border-radius:50%;
     }}
 
-    .green {{background:#36ff9a;box-shadow:0 0 10px #36ff9a}}
-    .cyan {{background:#00eaff;box-shadow:0 0 10px #00eaff}}
-    .purple {{background:#b400ff;box-shadow:0 0 10px #b400ff}}
+    .green {{background:var(--accent)}}
+    .cyan {{background:var(--accent2)}}
+    .purple {{background:var(--accent3)}}
 
     .badge {{
     display:inline-flex;
@@ -2245,7 +2380,7 @@ class DarkelfBrowser(QMainWindow):
     padding:40px;
     border-radius:18px;
     border:1px solid rgba(255,255,255,.08);
-    box-shadow:0 30px 60px rgba(0,0,0,.6),0 0 40px rgba(0,234,255,.15);
+    box-shadow:0 0 40px {accent2_rgba};
     }}
 
     .section-title {{
