@@ -60,6 +60,7 @@ from shadow.utils import (
     should_rotate,
     rotate_internal_seed,
     _safe_download_dir,
+    _randomized_filename,
     sanitize_url_clearurls,
     DUCK_LITE_HTTPS,
     BOOTUP_CANVAS_SEED
