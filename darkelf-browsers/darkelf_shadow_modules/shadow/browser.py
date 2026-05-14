@@ -1924,7 +1924,44 @@ class DarkelfBrowser(QMainWindow):
         self.tabs.setTabsClosable(True)
         self.tabs.setMovable(True)
         self.tabs.setDocumentMode(False)  # 🔥 IMPORTANT
+        
+        # + button on tab bar
+        self.plus_btn = QToolButton()
 
+        self.plus_btn.setText("+")
+        self.plus_btn.setCursor(Qt.PointingHandCursor)
+
+        # slightly tighter sizing
+        self.plus_btn.setFixedSize(32, 32)
+
+        # better alignment
+        self.plus_btn.setStyleSheet(f"""
+        QToolButton {{
+            background: transparent;
+            color: {self.accent_color};
+            border: none;
+
+            font-size: 26px;
+            font-weight: 700;
+
+            padding-bottom: 4px;
+            padding-right: 6px;
+        }}
+
+        QToolButton:hover {{
+            color: white;
+        }}
+        """)
+
+        self.plus_btn.clicked.connect(
+            lambda: self._add_tab(home=True)
+        )
+
+        self.tabs.setCornerWidget(
+            self.plus_btn,
+            Qt.TopRightCorner
+        )
+        
         self.tabs.tabCloseRequested.connect(self.close_tab)
 
         # -----------------------------
@@ -2132,8 +2169,6 @@ class DarkelfBrowser(QMainWindow):
 
         self.nuke_action = QAction(make_nuke_icon("#ff2a2a", 18), "Nuke", self)
 
-        self.addtab_action = QAction(make_icon(c, 20), "New Tab", self)
-
         self.nuke_action.triggered.connect(self.nuke_all_data)
 
         self.back_action.triggered.connect(self.go_back)
@@ -2143,7 +2178,6 @@ class DarkelfBrowser(QMainWindow):
         self.zoom_in_action.triggered.connect(self.zoom_in)
         self.zoom_out_action.triggered.connect(self.zoom_out)
         self.full_action.triggered.connect(self.toggle_fullscreen)
-        self.addtab_action.triggered.connect(lambda: self._add_tab(home=True))
 
         tb.addAction(self.back_action)
         tb.addAction(self.fwd_action)
@@ -2176,11 +2210,7 @@ class DarkelfBrowser(QMainWindow):
         }}
         """)
 
-
-        tb.addAction(self.zoom_out_action)
-        tb.addAction(self.zoom_in_action)
         tb.addAction(self.full_action)
-        tb.addAction(self.addtab_action)
         
         # ---- Accent color picker ----
 
@@ -2587,7 +2617,6 @@ class DarkelfBrowser(QMainWindow):
         self.zoom_in_action.setIcon(make_zoom_icon("+", c, 20))
         self.zoom_out_action.setIcon(make_zoom_icon("-", c, 20))
         self.full_action.setIcon(make_fullscreen_icon(c, 20))
-        self.addtab_action.setIcon(make_icon(c, 20))
         self.java_action.setIcon(make_java_icon(c, 18))
         self.miniai_action.setIcon(make_shield_icon(c, 18))
         self.hotkey_action.setIcon(make_keyboard_icon(color.name(), 18))
@@ -2700,7 +2729,27 @@ class DarkelfBrowser(QMainWindow):
         """)
 
         self._set_tab_style()
+        
+        if hasattr(self, "plus_btn"):
 
+            self.plus_btn.setStyleSheet(f"""
+            QToolButton {{
+                background: transparent;
+                color: {self.accent_color};
+                border: none;
+
+                font-size: 26px;
+                font-weight: 700;
+
+                padding-bottom: 4px;
+                padding-right: 6px;
+            }}
+
+            QToolButton:hover {{
+                color: white;
+            }}
+            """)
+            
         for i in range(self.tabs.count()):
             view = self.tabs.widget(i)
 
@@ -2980,6 +3029,8 @@ class DarkelfBrowser(QMainWindow):
 
         </style>
         </head>
+        
+        
 
         <body>
 
@@ -3023,7 +3074,30 @@ class DarkelfBrowser(QMainWindow):
                     <div class="desc">Take Snapshot</div>
                     <div class="key">Ctrl+Shift+S</div>
                 </div>
-                
+
+            </div>
+
+            <div class="group">
+
+                <div class="title">
+                    Zoom
+                </div>
+
+                <div class="row">
+                    <div class="desc">Zoom In</div>
+                    <div class="key">Ctrl/⌘ + +</div>
+                </div>
+
+                <div class="row">
+                    <div class="desc">Zoom Out</div>
+                    <div class="key">Ctrl/⌘ + -</div>
+                </div>
+
+                <div class="row">
+                    <div class="desc">Reset Zoom</div>
+                    <div class="key">Ctrl/⌘ + 0</div>
+                </div>
+
             </div>
 
             <div class="group">
@@ -3177,6 +3251,35 @@ class DarkelfBrowser(QMainWindow):
         find_next_action.triggered.connect(self.find_next)
         self.addAction(find_next_action)
         
+        # Zoom in
+        zoom_in_action = QAction(self)
+        zoom_in_action.setShortcuts([
+            "Ctrl+=",
+            "Ctrl++",
+            "Meta+=",
+            "Meta++"
+        ])
+        zoom_in_action.triggered.connect(self.zoom_in)
+        self.addAction(zoom_in_action)
+
+        # Zoom out
+        zoom_out_action = QAction(self)
+        zoom_out_action.setShortcuts([
+            "Ctrl+-",
+            "Meta+-"
+        ])
+        zoom_out_action.triggered.connect(self.zoom_out)
+        self.addAction(zoom_out_action)
+
+        # Reset zoom
+        zoom_reset_action = QAction(self)
+        zoom_reset_action.setShortcuts([
+            "Ctrl+0",
+            "Meta+0"
+        ])
+        zoom_reset_action.triggered.connect(self.reset_zoom)
+        self.addAction(zoom_reset_action)
+
         # Focus URL
         focus_url_action = QAction(self)
 
@@ -3230,6 +3333,11 @@ class DarkelfBrowser(QMainWindow):
         snapshot_action.triggered.connect(self.take_snapshot)
         self.addAction(snapshot_action)
         
+    def reset_zoom(self):
+        v = self.current_view()
+        if v:
+            v.setZoomFactor(1.0)
+            
     def _cleanup_webengine(self):
         # Close tabs from last to first
         for i in reversed(range(self.tabs.count())):
