@@ -3060,16 +3060,6 @@ class DarkelfBrowser(QMainWindow):
                     </div>
                 </div>
 
-                <div class="row">
-                    <div class="desc">
-                        Cursor can't be active in URL bar
-                    </div>
-
-                    <div class="key">
-                        Hotkeys Disabled
-                    </div>
-                </div>
-
             </div>
 
         </body>
