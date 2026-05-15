@@ -10,6 +10,7 @@ class DarkelfMiniAISentinel:
     Aggressive + Expanded Edition for Darkelf Shadow (PyQt5) - Enhanced for modern trackers,
     ClearURLs, AdGuard, full fingerprint monitoring, and advanced reporting.
     """
+
     MAX_URL_LENGTH = 2048
     CRITICAL_WINDOW_SECONDS = 60
 
@@ -28,14 +29,15 @@ class DarkelfMiniAISentinel:
         self.redirects = []
         # Aggressive lockdown!
         self.lockdown_active = False
-        self.lockdown_threshold = 5  # 1 critical event triggers lockdown
+        self.lockdown_threshold = 4  # 4 critical event triggers lockdown
         self.lockdown_triggered_at = None
         self.tracker_window = deque(maxlen=50)
         self.domain_risk_cache = {}
-        
+        self.ui = None
+
         # --- Panic Mode ---
         self.panic_mode_active = False
-        self.panic_threshold = 3  # number of critical events within window
+        self.panic_threshold = 8  # number of critical events within window
         self.panic_triggered_at = None
         self.critical_events = deque(maxlen=20)
 
@@ -43,33 +45,62 @@ class DarkelfMiniAISentinel:
         # Only treat these as "tools" when they appear as separate tokens in path/query/fragment
         # (not as part of random words/domains).
         self.hacker_tools = [
-            'nmap', 'sqlmap', 'metasploit', 'burpsuite', 'nikto', 'dirbuster', 'hydra',
-            'wireshark', 'tcpdump', 'ettercap', 'aircrack', 'hashcat', 'johntheripper',
-            'cobalt', 'mimikatz'
+            "nmap",
+            "sqlmap",
+            "metasploit",
+            "burpsuite",
+            "nikto",
+            "dirbuster",
+            "hydra",
+            "wireshark",
+            "tcpdump",
+            "ettercap",
+            "aircrack",
+            "hashcat",
+            "johntheripper",
+            "cobalt",
+            "mimikatz",
         ]
 
         # Intrusion patterns: keep your list, but we will apply smarter matching below.
         self.intrusion_patterns = {
-            'sql_injection': ['union select', 'or 1=1', "'; drop", 'exec(', 'script>'],
-            'xss': ['<script', 'javascript:', 'onerror=', 'onload=', 'eval('],
-            'path_traversal': ['../', '..\\', '%2e%2e', 'etc/passwd', 'windows/system'],
-            'command_injection': ['| cat', '; ls', '&& whoami', 'cmd.exe', '/bin/bash'],
-            'malware': ['ransomware', 'cryptolocker', 'wannacry', 'trojan', 'backdoor'],
-            'exploit': ['metasploit', 'shellcode', 'exploit-db', 'cve-', '0day'],
-            'phishing': ['verify-account', 'suspended-account', 'confirm-identity', 'urgent-action'],
-            'exfil': ['base64,', 'data:text', 'blob:', 'download.php?file='],
+            "sql_injection": ["union select", "or 1=1", "'; drop", "exec(", "script>"],
+            "xss": ["<script", "javascript:", "onerror=", "onload=", "eval("],
+            "path_traversal": ["../", "..\\", "%2e%2e", "etc/passwd", "windows/system"],
+            "command_injection": ["| cat", "; ls", "&& whoami", "cmd.exe", "/bin/bash"],
+            "malware": ["ransomware", "cryptolocker", "wannacry", "trojan", "backdoor"],
+            "exploit": ["metasploit", "shellcode", "exploit-db", "cve-", "0day"],
+            "phishing": [
+                "verify-account",
+                "suspended-account",
+                "confirm-identity",
+                "urgent-action",
+            ],
+            "exfil": [
+                "download.php?file=",
+                "data:application/octet-stream",
+                "data:text/plain;base64",
+            ],
         }
 
         # Add AdGuard/clearurls-specific domains
         # Fix: "clearurls" is not a domain; keep it for URL keyword detection but not domain matching.
         # Fix: TLD markers (".tk" etc.) should match exact TLD, not substring anywhere in domain.
         self.high_risk_domains = [
-            'doubleclick.net', 'googlesyndication.com', 'googleadservices.com', 'adguard.com',
-            'facebook.net', 'scorecardresearch.com', 'quantserve.com', 'taboola.com',
-            'outbrain.com', 'criteo.com', 'adnxs.com',
+            "doubleclick.net",
+            "googlesyndication.com",
+            "googleadservices.com",
+            "adguard.com",
+            "facebook.net",
+            "scorecardresearch.com",
+            "quantserve.com",
+            "taboola.com",
+            "outbrain.com",
+            "criteo.com",
+            "adnxs.com",
         ]
-        self.high_risk_tlds = {'.tk', '.ml', '.ga', '.cf', '.gq'}
-        
+        self.high_risk_tlds = {".tk", ".ml", ".ga", ".cf", ".gq"}
+
         # Trusted high-traffic infrastructure (prevents false positives)
         self.trusted_cdn_domains = {
             "youtube.com",
@@ -79,24 +110,39 @@ class DarkelfMiniAISentinel:
             "fonts.gstatic.com",
             "googleusercontent.com",
             "cloudflare.com",
-            "cdnjs.cloudflare.com"
+            "cdnjs.cloudflare.com",
         }
 
         self.fingerprint_apis = {
-            'canvas': 0, 'webgl': 0, 'audio': 0, 'font': 0, 'battery': 0,
-            'geolocation': 0, 'media_devices': 0, 'webrtc': 0,
+            "canvas": 0,
+            "webgl": 0,
+            "audio": 0,
+            "font": 0,
+            "battery": 0,
+            "geolocation": 0,
+            "media_devices": 0,
+            "webrtc": 0,
         }
         self.request_timestamps = deque(maxlen=100)
         self.anomaly_threshold = 150  # Aggressive!
         self.flood_threshold = 3500
-        
+
         # Static assets that should not trigger anomaly detection
         self.static_extensions = (
-            ".svg",".png",".jpg",".jpeg",".webp",".gif",
-            ".woff",".woff2",".ttf",".css",".ico"
+            ".svg",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".webp",
+            ".gif",
+            ".woff",
+            ".woff2",
+            ".ttf",
+            ".css",
+            ".ico",
         )
 
-        print("[MiniAI] Aggressive & Expanded Sentinel ready (threshold=1)")
+        print("[MiniAI] Aggressive & Expanded Sentinel ready (threshold=4)")
 
     # --- Helper methods (new) ---
     def _safe_parse_url(self, url_norm: str):
@@ -149,7 +195,11 @@ class DarkelfMiniAISentinel:
         if not haystack or not token:
             return False
         # Treat these as separators: / ? & = # : . - _ +
-        pattern = r"(?:^|[\/\?\&\=\#\:\.\-\_\+])" + re.escape(token) + r"(?:$|[\/\?\&\=\#\:\.\-\_\+])"
+        pattern = (
+            r"(?:^|[\/\?\&\=\#\:\.\-\_\+])"
+            + re.escape(token)
+            + r"(?:$|[\/\?\&\=\#\:\.\-\_\+])"
+        )
         return re.search(pattern, haystack) is not None
 
     def monitor_network(self, url, headers=None):
@@ -163,18 +213,13 @@ class DarkelfMiniAISentinel:
 
         # AUTO-RELEASE LOCKDOWN AFTER 5 MINUTES
         if self.lockdown_active:
-            if time.time() - self.lockdown_triggered_at > 300:
-                print("[MiniAI] Lockdown auto-released")
-                self.lockdown_active = False
-                self.lockdown_triggered_at = None
-            else:
-                print("[MiniAI] LOCKDOWN: Absolute block:", str(url)[:80])
-                return
+            print("[MiniAI] LOCKDOWN: Absolute block:", str(url)[:80])
+            return
 
         now = time.time()
 
         # Normalize carefully: decode twice like you do, but keep within MAX_URL_LENGTH.
-        url_norm = unquote(unquote(str(url)))[:self.MAX_URL_LENGTH]
+        url_norm = unquote(unquote(str(url)))[: self.MAX_URL_LENGTH]
         url_norm_l = url_norm.lower()
 
         parsed, domain, path, query, fragment = self._safe_parse_url(url_norm_l)
@@ -183,11 +228,11 @@ class DarkelfMiniAISentinel:
             self.unique_domains.add(domain)
 
         event = {
-            'url': url_norm_l,
-            'timestamp': now,
-            'datetime': time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)),
-            'threats': [],
-            'risk_level': 'low'
+            "url": url_norm_l,
+            "timestamp": now,
+            "datetime": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)),
+            "threats": [],
+            "risk_level": "low",
         }
 
         critical = False
@@ -198,21 +243,21 @@ class DarkelfMiniAISentinel:
                 cached = self.domain_risk_cache[domain]
 
                 # Apply cached risk level
-                event['threats'].append("DOMAIN_CACHE")
-                event['risk_level'] = min(
-                    event['risk_level'],
-                    cached.get('risk', 'low'),
-                    key=lambda r: ["low","medium","high","critical"].index(r)
+                event["threats"].append("DOMAIN_CACHE")
+                event["risk_level"] = min(
+                    event["risk_level"],
+                    cached.get("risk", "low"),
+                    key=lambda r: ["low", "medium", "high", "critical"].index(r),
                 )
 
                 # Track how many times we've seen it
-                cached['seen'] += 1
+                cached["seen"] += 1
 
             else:
                 # First time seeing this domain
                 self.domain_risk_cache[domain] = {
-                    "risk": event['risk_level'],
-                    "seen": 1
+                    "risk": event["risk_level"],
+                    "seen": 1,
                 }
         # -------------------------
         # 1) Intrusion pattern detection (reduced false positives)
@@ -225,48 +270,56 @@ class DarkelfMiniAISentinel:
                 # Keep your behavior but only match on focus string to reduce domain-based false positives
                 if pat in focus:
                     self.intrusion_attempts += 1
-                    event['threats'].append(f"INTRUSION:{key.upper()}:{pat}")
+                    event["threats"].append(f"INTRUSION:{key.upper()}:{pat}")
                     # Escalate repeated intrusions
                     if self.intrusion_attempts >= 3:
-                        event['risk_level'] = 'critical'
+                        event["risk_level"] = "critical"
                         self.intrusion_attempts = 0
                     # Only some categories should immediately be critical.
-                    if key in ("sql_injection", "path_traversal", "command_injection", "exfil"):
-                        event['risk_level'] = 'critical'
+                    if key in (
+                        "sql_injection",
+                        "path_traversal",
+                        "command_injection",
+                        "exfil",
+                    ):
+                        event["risk_level"] = "critical"
                         critical = True
                     elif key in ("xss", "phishing", "malware", "exploit"):
                         # still serious, but don't always auto-lockdown unless other indicators confirm
-                        if event['risk_level'] == 'low':
-                            event['risk_level'] = 'high'
+                        if event["risk_level"] == "low":
+                            event["risk_level"] = "high"
 
         # Hacker tools: only treat as critical when present as tokens in path/query/fragment
         tool_focus = f"{path}&{query}#{fragment}"
         for tool in self.hacker_tools:
             if self._token_present(tool_focus, tool):
                 self.intrusion_attempts += 1
-                event['threats'].append("TOOL:" + tool.upper())
-                event['risk_level'] = 'critical'
+                event["threats"].append("TOOL:" + tool.upper())
+                event["risk_level"] = "critical"
                 critical = True
 
         # Regex detection (tightened)
         # - Use word boundaries and safer patterns.
         # - Apply to focus only.
         regexes = [
-            (r"(?:\bunion\b\s+\bselect\b|\bor\b\s+1\s*=\s*1\b|\bdrop\b\s+\btable\b|\binsert\b\s+\binto\b)", 'critical'),
-            (r"(?:<script\b|javascript:|\bonerror\s*=|\bonload\s*=)", 'high'),
-            (r"(?:\.\./|\.\.\\|%2e%2e)", 'critical'),
-            (r"(?:;|\|\||&&)\s*(?:whoami|ls|cat|bash|cmd(?:\.exe)?)\b", 'critical'),
+            (
+                r"(?:\bunion\b\s+\bselect\b|\bor\b\s+1\s*=\s*1\b|\bdrop\b\s+\btable\b|\binsert\b\s+\binto\b)",
+                "critical",
+            ),
+            (r"(?:<script\b|javascript:|\bonerror\s*=|\bonload\s*=)", "high"),
+            (r"(?:\.\./|\.\.\\|%2e%2e)", "critical"),
+            (r"(?:;|\|\||&&)\s*(?:whoami|ls|cat|bash|cmd(?:\.exe)?)\b", "critical"),
         ]
         for reg, risk in regexes:
             try:
                 if re.search(reg, focus, flags=re.IGNORECASE):
-                    event['threats'].append(f"INTRUSION-REGEX:{risk}")
+                    event["threats"].append(f"INTRUSION-REGEX:{risk}")
                     # Preserve your intent: critical triggers lockdown
-                    if risk == 'critical':
-                        event['risk_level'] = 'critical'
+                    if risk == "critical":
+                        event["risk_level"] = "critical"
                         critical = True
-                    elif event['risk_level'] == 'low':
-                        event['risk_level'] = risk
+                    elif event["risk_level"] == "low":
+                        event["risk_level"] = risk
             except re.error:
                 # fail safe: if regex is invalid for some reason, skip it
                 pass
@@ -277,64 +330,98 @@ class DarkelfMiniAISentinel:
         if domain:
             for bad in self.high_risk_domains:
                 if self._domain_matches(domain, bad):
-                    event['threats'].append(f"HIGH_RISK_DOMAIN:{bad}")
-                    if event['risk_level'] == 'low':
-                        event['risk_level'] = 'medium'
+                    event["threats"].append(f"HIGH_RISK_DOMAIN:{bad}")
+                    if event["risk_level"] == "low":
+                        event["risk_level"] = "medium"
 
             if self._has_high_risk_tld(domain):
-                event['threats'].append("HIGH_RISK_TLD")
-                if event['risk_level'] == 'low':
-                    event['risk_level'] = 'medium'
+                event["threats"].append("HIGH_RISK_TLD")
+                if event["risk_level"] == "low":
+                    event["risk_level"] = "medium"
 
         # -------------------------
         # 3) Passive tracker/fingerprint/malware/exploit detection (reduced false positives)
         # -------------------------
         # Malware: require stronger context than just substring "trojan" etc anywhere.
-        malware_terms = ("malware", "virus", "trojan", "ransomware", "backdoor", "cryptolocker", "wannacry")
-        if any(self._token_present(focus, t) for t in malware_terms) or ("c2" in query and ("panel" in path or "gate" in path)):
+        malware_terms = (
+            "malware",
+            "virus",
+            "trojan",
+            "ransomware",
+            "backdoor",
+            "cryptolocker",
+            "wannacry",
+        )
+        if any(self._token_present(focus, t) for t in malware_terms) or (
+            "c2" in query and ("panel" in path or "gate" in path)
+        ):
             self.malware_hits += 1
-            event['threats'].append("MALWARE")
-            event['risk_level'] = 'critical'
+            event["threats"].append("MALWARE")
+            event["risk_level"] = "critical"
             critical = True
 
         # Exploit: "exploit" and "payload" are common benign words; only escalate if combined with other exploit indicators.
         exploit_indicators = ("shellcode", "metasploit", "exploit-db", "cve-", "0day")
-        if any(x in focus for x in exploit_indicators) or (("payload" in focus or "exploit" in focus) and ("cve-" in focus or "shellcode" in focus)):
+        if any(x in focus for x in exploit_indicators) or (
+            ("payload" in focus or "exploit" in focus)
+            and ("cve-" in focus or "shellcode" in focus)
+        ):
             self.exploit_attempts += 1
-            event['threats'].append("EXPLOIT")
-            event['risk_level'] = 'critical'
+            event["threats"].append("EXPLOIT")
+            event["risk_level"] = "critical"
             critical = True
 
         # Phishing: keep your detection, but use focus and token-ish checks
-        if any(x in focus for x in ("verify-account", "suspended-account", "confirm-identity", "urgent-action")) or self._token_present(focus, "phish"):
+        if any(
+            x in focus
+            for x in (
+                "verify-account",
+                "suspended-account",
+                "confirm-identity",
+                "urgent-action",
+            )
+        ) or self._token_present(focus, "phish"):
             self.suspicious_hits += 1
-            event['threats'].append("PHISHING")
-            if event['risk_level'] in ("low", "medium"):
-                event['risk_level'] = 'high'
+            event["threats"].append("PHISHING")
+            if event["risk_level"] in ("low", "medium"):
+                event["risk_level"] = "high"
 
         # Trackers: keep broad detection, but avoid counting "clearurls" as domain risk; it's a keyword only.
-        if any(x in url_norm_l for x in ("tracker", "analytics", "beacon", "doubleclick", "facebook.net", "clearurls", "adguard")):
+        if any(
+            x in url_norm_l
+            for x in (
+                "tracker",
+                "analytics",
+                "beacon",
+                "doubleclick",
+                "facebook.net",
+                "clearurls",
+                "adguard",
+            )
+        ):
             self.tracker_hits += 1
             self.tracker_window.append(now)
 
             tracker_burst = sum(1 for t in self.tracker_window if (now - t) < 2)
 
             if tracker_burst > 25:
-                event['threats'].append("TRACKER_STORM")
-                event['risk_level'] = 'high'
-            event['threats'].append("TRACKER")
-            if event['risk_level'] == 'low':
-                event['risk_level'] = 'medium'
+                event["threats"].append("TRACKER_STORM")
+                event["risk_level"] = "high"
+            event["threats"].append("TRACKER")
+            if event["risk_level"] == "low":
+                event["risk_level"] = "medium"
 
         # Fingerprint API triggers (simulate Cover Your Tracks test)
         # Reduce false positives: check in focus first; fallback to full URL if needed.
         fp_focus = focus if focus else url_norm_l
         for k in self.fingerprint_apis:
-            if self._token_present(fp_focus, k) or (k in fp_focus and k in ("webgl", "webrtc", "canvas")):
+            if self._token_present(fp_focus, k) or (
+                k in fp_focus and k in ("webgl", "webrtc", "canvas")
+            ):
                 self.fingerprint_apis[k] += 1
-                event['threats'].append(f"FINGERPRINT:{k}")
-                if event['risk_level'] == 'low':
-                    event['risk_level'] = 'medium'
+                event["threats"].append(f"FINGERPRINT:{k}")
+                if event["risk_level"] == "low":
+                    event["risk_level"] = "medium"
                 self.fingerprint_attempts += 1
 
         # -------------------------
@@ -351,21 +438,25 @@ class DarkelfMiniAISentinel:
         is_static_asset = any(path.endswith(ext) for ext in self.static_extensions)
 
         # Burst detection
-        if last1s > self.anomaly_threshold and not trusted_domain and not is_static_asset:
-            event['threats'].append("ANOMALY:burst")
-            if event['risk_level'] in ("low", "medium"):
-                event['risk_level'] = "high"
+        if (
+            last1s > self.anomaly_threshold
+            and not trusted_domain
+            and not is_static_asset
+        ):
+            event["threats"].append("ANOMALY:burst")
+            if event["risk_level"] in ("low", "medium"):
+                event["risk_level"] = "high"
 
         if last1s > self.flood_threshold and not trusted_domain and not is_static_asset:
-            event['threats'].append("ANOMALY:REQUEST_FLOOD")
-            event['risk_level'] = "critical"
+            event["threats"].append("ANOMALY:REQUEST_FLOOD")
+            event["risk_level"] = "critical"
             critical = True
-            
+
         # Rapid redirect loop detection (unchanged)
         if len(self.redirects) > 7:
-            event['threats'].append("ANOMALY:redirect_loop")
-            if event['risk_level'] in ("low", "medium"):
-                event['risk_level'] = 'high'
+            event["threats"].append("ANOMALY:redirect_loop")
+            if event["risk_level"] in ("low", "medium"):
+                event["risk_level"] = "high"
 
         self.events.append(event)
 
@@ -374,39 +465,41 @@ class DarkelfMiniAISentinel:
             self.ui.update_miniai_icon()
 
         # -------------------------
-        # 5) Lockdown trigger (keep behavior intact; still immediate on critical)
+        # 5) Lockdown trigger
         # -------------------------
         real_attack = any(
             kw in t.upper()
-            for t in event.get('threats', [])
+            for t in event.get("threats", [])
             for kw in ("INTRUSION", "MALWARE", "EXPLOIT", "TOOL")
         )
 
-        # -------------------------------------------------
-        # Lockdown trigger
-        # -------------------------------------------------
-
-        if event.get('risk_level') == 'critical' and real_attack:
+        if event.get("risk_level") == "critical" and real_attack:
 
             self.critical_events.append(now)
 
             print("\n🔴 [MiniAI] CRITICAL threat detected!")
-            print("Threats:", event.get('threats'))
+            print("Threats:", event.get("threats"))
 
-            # Activate lockdown only if not already active
-            if not self.lockdown_active:
-                self.lockdown_active = True
-                self.lockdown_triggered_at = now
-                print("🔒 Darkelf MiniAI LOCKDOWN ENGAGED")
+            recent = [
+                t
+                for t in self.critical_events
+                if (now - t) < self.CRITICAL_WINDOW_SECONDS
+            ]
 
-            # Count critical events inside time window
-            recent = [t for t in self.critical_events if (now - t) < self.CRITICAL_WINDOW_SECONDS]
+            # Trigger lockdown only after threshold
+            if len(recent) >= self.lockdown_threshold:
 
+                if not self.lockdown_active:
+                    self.lockdown_active = True
+                    self.lockdown_triggered_at = now
+
+                    print("🔒 Darkelf MiniAI LOCKDOWN ENGAGED")
+
+            # Panic mode
             if len(recent) >= self.panic_threshold:
                 self.trigger_panic_mode("Multiple critical intrusion events")
 
             print("🛑 Event:", event)
-
 
     def on_http_blocked(self, url):
 
@@ -415,12 +508,12 @@ class DarkelfMiniAISentinel:
         self.http_blocks_attempts += 1
 
         event = {
-            'url': url,
-            'timestamp': time.time(),
-            'datetime': time.strftime("%Y-%m-%d %H:%M:%S"),
-            'threats': ['HTTP_AUTO_UPGRADE'],
-            'risk_level': 'medium',
-            'upgrade_to': https_url
+            "url": url,
+            "timestamp": time.time(),
+            "datetime": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "threats": ["HTTP_AUTO_UPGRADE"],
+            "risk_level": "medium",
+            "upgrade_to": https_url,
         }
 
         self.events.append(event)
@@ -434,90 +527,104 @@ class DarkelfMiniAISentinel:
 
         # ---- Threat Score Calculation ----
         threat_score = (
-            self.tracker_hits * 1 +
-            self.suspicious_hits * 1 +
-            self.fingerprint_attempts * 2 +
-            self.intrusion_attempts * 4 +
-            self.malware_hits * 6 +
-            self.exploit_attempts * 6 +
-            self.http_blocks_attempts * 1
+            self.tracker_hits * 1
+            + self.suspicious_hits * 1
+            + self.fingerprint_attempts * 2
+            + self.intrusion_attempts * 4
+            + self.malware_hits * 6
+            + self.exploit_attempts * 6
+            + self.http_blocks_attempts * 1
         )
 
         return {
-            'uptime_seconds': uptime,
-            'total_events': len(self.events),
-            'unique_domains': len(self.unique_domains),
-
+            "uptime_seconds": uptime,
+            "total_events": len(self.events),
+            "unique_domains": len(self.unique_domains),
             # NEW
-            'threat_score': threat_score,
-
-            'lockdown': {
-                'active': self.lockdown_active,
-                'threshold': self.lockdown_threshold,
-                'triggered_at': self.lockdown_triggered_at,
+            "threat_score": threat_score,
+            "lockdown": {
+                "active": self.lockdown_active,
+                "threshold": self.lockdown_threshold,
+                "triggered_at": self.lockdown_triggered_at,
             },
-
-            'threats': {
-                'trackers': self.tracker_hits,
-                'suspicious': self.suspicious_hits,
-                'malware': self.malware_hits,
-                'exploits': self.exploit_attempts,
-                'intrusions': self.intrusion_attempts,
-                'fingerprinting': self.fingerprint_attempts,
-                'http_blocks': self.http_blocks_attempts,
+            "threats": {
+                "trackers": self.tracker_hits,
+                "suspicious": self.suspicious_hits,
+                "malware": self.malware_hits,
+                "exploits": self.exploit_attempts,
+                "intrusions": self.intrusion_attempts,
+                "fingerprinting": self.fingerprint_attempts,
+                "http_blocks": self.http_blocks_attempts,
             },
-
-            'fingerprinting_apis': dict(self.fingerprint_apis),
-
-            'recent_threats': [
-                e for e in list(self.events)[-10:]
-                if e['risk_level'] in ('high', 'critical')
+            "fingerprinting_apis": dict(self.fingerprint_apis),
+            "recent_threats": [
+                e
+                for e in list(self.events)[-10:]
+                if e["risk_level"] in ("high", "critical")
             ],
-
-            'panic': {
-                'active': self.panic_mode_active,
-                'triggered_at': self.panic_triggered_at,
-            }
+            "panic": {
+                "active": self.panic_mode_active,
+                "triggered_at": self.panic_triggered_at,
+            },
         }
 
     def get_threat_report(self):
         stats = self.get_statistics()
-        uptime_min = stats['uptime_seconds'] / 60
+        uptime_min = stats["uptime_seconds"] / 60
         total_threats = (
-            stats['threats']['trackers'] + stats['threats']['fingerprinting'])
+            stats["threats"]["trackers"] + stats["threats"]["fingerprinting"]
+        )
         if self.panic_mode_active:
             lockdown_status = "🚨 PANIC"
-        elif stats['lockdown']['active']:
+        elif stats["lockdown"]["active"]:
             lockdown_status = "🔴 LOCKDOWN"
         else:
             lockdown_status = "🟢 STANDBY"
         domain_stats = {}
         for event in self.events:
-            dom = urlparse(event['url']).netloc or 'unknown'
+            dom = urlparse(event["url"]).netloc or "unknown"
             if dom not in domain_stats:
-                domain_stats[dom] = {'trackers': 0, 'fingerprinting': 0, 'malware': 0, 'intrusions': 0, 'http_blocks': 0, 'risk_level': 'low'}
-            for threat in event['threats']:
-                if 'TRACKER' in threat: domain_stats[dom]['trackers'] += 1
-                elif 'FINGERPRINT' in threat: domain_stats[dom]['fingerprinting'] += 1
-                elif 'MALWARE' in threat or 'EXPLOIT' in threat: domain_stats[dom]['malware'] += 1
-                elif 'INTRUSION' in threat or 'TOOL' in threat: domain_stats[dom]['intrusions'] += 1
-                elif 'HTTP_AUTO_UPGRADE' in threat: domain_stats[dom]['http_blocks'] += 1
-            if event['risk_level'] == 'critical':
-                domain_stats[dom]['risk_level'] = 'critical'
-            elif event['risk_level'] == 'high' and domain_stats[dom]['risk_level'] != 'critical':
-                domain_stats[dom]['risk_level'] = 'high'
-            elif event['risk_level'] == 'medium' and domain_stats[dom]['risk_level'] == 'low':
-                domain_stats[dom]['risk_level'] = 'medium'
+                domain_stats[dom] = {
+                    "trackers": 0,
+                    "fingerprinting": 0,
+                    "malware": 0,
+                    "intrusions": 0,
+                    "http_blocks": 0,
+                    "risk_level": "low",
+                }
+            for threat in event["threats"]:
+                if "TRACKER" in threat:
+                    domain_stats[dom]["trackers"] += 1
+                elif "FINGERPRINT" in threat:
+                    domain_stats[dom]["fingerprinting"] += 1
+                elif "MALWARE" in threat or "EXPLOIT" in threat:
+                    domain_stats[dom]["malware"] += 1
+                elif "INTRUSION" in threat or "TOOL" in threat:
+                    domain_stats[dom]["intrusions"] += 1
+                elif "HTTP_AUTO_UPGRADE" in threat:
+                    domain_stats[dom]["http_blocks"] += 1
+            if event["risk_level"] == "critical":
+                domain_stats[dom]["risk_level"] = "critical"
+            elif (
+                event["risk_level"] == "high"
+                and domain_stats[dom]["risk_level"] != "critical"
+            ):
+                domain_stats[dom]["risk_level"] = "high"
+            elif (
+                event["risk_level"] == "medium"
+                and domain_stats[dom]["risk_level"] == "low"
+            ):
+                domain_stats[dom]["risk_level"] = "medium"
         sorted_domains = sorted(
             domain_stats.items(),
             key=lambda x: (
-                x[1]['trackers'] +
-                x[1]['fingerprinting'] +
-                x[1]['malware'] +
-                x[1]['intrusions'] +
-                x[1]['http_blocks']
+                x[1]["trackers"]
+                + x[1]["fingerprinting"]
+                + x[1]["malware"]
+                + x[1]["intrusions"]
+                + x[1]["http_blocks"]
             ),
-            reverse=True
+            reverse=True,
         )
         report = f"""
 ╔══════════════════════════════════════════════════════════╗
@@ -547,27 +654,30 @@ FINGERPRINTING DEFENSE STATUS:
 TOP 10 THREAT DOMAINS:
 """
         for i, (dom, threats) in enumerate(sorted_domains[:10], 1):
-            tracker_icon = "🔴" if threats['trackers'] > 0 else "⚪"
-            fp_icon = "🟡" if threats['fingerprinting'] > 0 else "⚪"
-            malware_icon = "🚨" if threats['malware'] > 0 else "⚪"
-            intrusion_icon = "⛔" if threats['intrusions'] > 0 else "⚪"
-            http_icon = "🔒" if threats['http_blocks'] > 0 else "⚪"
+            tracker_icon = "🔴" if threats["trackers"] > 0 else "⚪"
+            fp_icon = "🟡" if threats["fingerprinting"] > 0 else "⚪"
+            malware_icon = "🚨" if threats["malware"] > 0 else "⚪"
+            intrusion_icon = "⛔" if threats["intrusions"] > 0 else "⚪"
+            http_icon = "🔒" if threats["http_blocks"] > 0 else "⚪"
             risk_color = {
-                'critical': '🔴', 'high': '🟠', 'medium': '🟡', 'low': '⚪'
-            }.get(threats['risk_level'], '⚪')
+                "critical": "🔴",
+                "high": "🟠",
+                "medium": "🟡",
+                "low": "⚪",
+            }.get(threats["risk_level"], "⚪")
             report += f"\n{i:2d}. {risk_color} {dom[:45]:<45}\n    Track: {tracker_icon} {threats['trackers']:2d} | FP: {fp_icon} {threats['fingerprinting']:2d} | Mal: {malware_icon} {threats['malware']:2d} | Intru: {intrusion_icon} {threats['intrusions']:2d} | HTTP: {http_icon} {threats['http_blocks']:2d}"
         report += f"\n\nRECENT HIGH-RISK EVENTS: {len(stats['recent_threats'])}"
-        for event in stats['recent_threats'][-5:]:
+        for event in stats["recent_threats"][-5:]:
             report += f"\n  • {event['datetime']} | {event['risk_level'].upper()} | {', '.join(event['threats'][:2])}"
-        report += "\n" + "="*62
+        report += "\n" + "=" * 62
         if self.panic_mode_active:
             report += "\n  🚨 PANIC MODE ACTIVE - Browser compromised state"
-        elif stats['lockdown']['active']:
+        elif stats["lockdown"]["active"]:
             report += "\n  🔴 LOCKDOWN ACTIVE - All requests blocked"
         else:
             report += "\n  ✅ No fingerprint leaks. All tracker attempts defended."
 
-        report += "\n" + "="*62
+        report += "\n" + "=" * 62
         return report
 
     def is_locked_down(self):
@@ -582,7 +692,7 @@ TOP 10 THREAT DOMAINS:
         self.events.clear()
         print("[MiniAI] 🟢 Lockdown reset - System restored")
         return True
-        
+
     def trigger_panic_mode(self, reason="unknown"):
         if self.panic_mode_active:
             return
@@ -601,7 +711,7 @@ TOP 10 THREAT DOMAINS:
         # disable JS
         # clear cookies
         # isolate profile
-        
+
     def reset_panic(self, admin_override=False):
         if not admin_override:
             print("[MiniAI] Panic reset requires admin_override=True")
@@ -616,8 +726,49 @@ TOP 10 THREAT DOMAINS:
         print("[MiniAI] 🟢 Panic mode cleared - system restored")
         return True
 
+    def check_lockdown_timeout(self):
+
+        now = time.time()
+
+        # -------------------------
+        # Auto-release LOCKDOWN
+        # -------------------------
+        if (
+            self.lockdown_active
+            and self.lockdown_triggered_at
+            and now - self.lockdown_triggered_at > 300
+        ):
+            print("[MiniAI] 🟢 Lockdown auto-released")
+
+            self.lockdown_active = False
+            self.lockdown_triggered_at = None
+
+            # Clear old attack history
+            self.critical_events.clear()
+
+        # -------------------------
+        # Auto-release PANIC MODE
+        # -------------------------
+        if (
+            self.panic_mode_active
+            and self.panic_triggered_at
+            and now - self.panic_triggered_at > 300
+        ):
+            print("[MiniAI] 🟢 Panic auto-released")
+
+            self.panic_mode_active = False
+            self.panic_triggered_at = None
+
+            # Also clear lockdown state
+            self.lockdown_active = False
+            self.lockdown_triggered_at = None
+
+            # Full recovery reset
+            self.critical_events.clear()
+
     def shutdown(self):
-        if not self.enabled: return
+        if not self.enabled:
+            return
         self.enabled = False
         try:
             print(self.get_threat_report())
