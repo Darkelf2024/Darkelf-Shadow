@@ -42,7 +42,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLineEdit, QToolBar, QPushButton, QLabel,
     QWidget, QDialog, QTabWidget, QTabBar, QMessageBox, QToolButton,
     QProgressBar, QMenu, QWidgetAction, QGridLayout, QVBoxLayout,
-    QHBoxLayout, QFileDialog, QProgressDialog, QInputDialog
+    QHBoxLayout, QFileDialog, QProgressDialog, QInputDialog, QStyle
 )
 
 # --- Qt WebEngine ---
@@ -2176,6 +2176,26 @@ class DarkelfBrowser(QMainWindow):
         )
         self.lock_action.setVisible(False)
         
+        # Clear / X button
+        self.clear_action = self.addr.addAction(
+            self.style().standardIcon(
+                QStyle.SP_LineEditClearButton
+            ),
+            QLineEdit.TrailingPosition
+        )
+
+        self.clear_action.triggered.connect(
+            self.addr.clear
+        )
+
+        # Hide until text exists
+        self.clear_action.setVisible(False)
+
+        # Auto show/hide
+        self.addr.textChanged.connect(
+            lambda text: self.clear_action.setVisible(bool(text))
+        )
+        
         self.addr.setStyleSheet(f"""
         QLineEdit {{
             background-color: #12141b;
@@ -3092,7 +3112,25 @@ class DarkelfBrowser(QMainWindow):
                     <div class="key">Ctrl/⌘ + G</div>
                 </div>
                 
-            </div>           
+            </div> 
+            
+            <div class="group">
+
+                <div class="title">
+                    Window
+                </div>
+
+                <div class="row">
+                    <div class="desc">Toggle Fullscreen</div>
+                    <div class="key">F11 / Alt+Enter</div>
+                </div>
+
+                <div class="row">
+                    <div class="desc">macOS Fullscreen</div>
+                    <div class="key">Ctrl+⌘+F</div>
+                </div>
+
+            </div>
                  
             <div class="group">
 
@@ -3310,6 +3348,21 @@ class DarkelfBrowser(QMainWindow):
         snapshot_action.triggered.connect(self.take_snapshot)
         self.addAction(snapshot_action)
         
+                # Fullscreen
+        fullscreen_action = QAction(self)
+
+        fullscreen_action.setShortcuts([
+            "F11",
+            "Alt+Enter",
+            "Ctrl+Meta+F"
+        ])
+
+        fullscreen_action.triggered.connect(
+            self.toggle_fullscreen
+        )
+
+        self.addAction(fullscreen_action)
+        
     def reset_zoom(self):
         v = self.current_view()
         if v:
@@ -3454,7 +3507,7 @@ class DarkelfBrowser(QMainWindow):
             controller.authenticate(cookie)
         except Exception as e:
             print(f"[Darkelf] Tor cookie authentication failed: {e}")
-            
+                    
     def _hook_secure_downloads(self):
 
         signal = self.shared_profile.downloadRequested
