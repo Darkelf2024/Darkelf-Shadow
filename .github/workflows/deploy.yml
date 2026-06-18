@@ -169,7 +169,7 @@ jobs:
           Copy-Item "dist\installer\DarkelfShadow-Setup-$env:VERSION.exe" "out\"
       - name: Generate SBOM
         shell: bash
-        run: cyclonedx-py environment --output-format json --outfile "out/sbom-windows-${VERSION}.json"
+        run: cyclonedx-py environment --output-format json -o "out/sbom-windows-${VERSION}.json"
       - name: Sign — SHA256 checksums
         shell: bash
         run: |
@@ -255,7 +255,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends lintian
           lintian out/*.deb || true
       - name: Generate SBOM
-        run: cyclonedx-py environment --output-format json --outfile "out/sbom-linux-${VERSION}.json"
+        run: cyclonedx-py environment --output-format json -o "out/sbom-linux-${VERSION}.json"
       - name: Sign — SHA256 checksums
         run: |
           cd out
