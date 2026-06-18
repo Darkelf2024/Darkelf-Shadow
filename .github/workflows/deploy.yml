@@ -50,7 +50,7 @@ jobs:
         run: pip-audit -r requirements.txt --strict
       - name: Dependency review (PRs only)
         if: github.event_name == 'pull_request'
-        uses: actions/dependency-review-action@v4
+        uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: high
 
