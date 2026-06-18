@@ -1,11 +1,21 @@
-name: release
+name: ci-deploy
 
-# Semantic release pipeline.
-#   push to main      -> vet + release-please; on a merged release PR, build
-#                        Windows + Linux and publish the GitHub Release.
-#   push tag v*       -> manual/tag-driven build + publish (fallback).
-#   pull_request      -> vet + build for verification (no publish).
-#   workflow_dispatch -> vet + build, artifacts only (dry-run, no publish).
+# True CI/CD deploy pipeline (no release-please).
+#
+#   Stages run strictly in order; a later stage only starts if every earlier one passed:
+#     1. preflight   - lint, static security scan, dep audit, byte-compile, unit/alert tests
+#     2. version     - resolve the version + tag from version.txt (single source of truth)
+#     3. build       - PyInstaller one-dir build on Windows + Linux
+#     4. test-build  - smoke-test the *packaged* app headless (runs inside each build job)
+#     5. tag         - create + push vX.Y.Z, but ONLY if all builds/tests passed and the
+#                      tag does not already exist (idempotent: one release per version bump)
+#     6. release     - verify SHA256SUMS, then publish the GitHub Release with signed assets
+#
+#   Triggers:
+#     push to main      -> full pipeline; auto-tag + release when version.txt is bumped
+#     push tag v*       -> full pipeline against that tag (manual release path)
+#     pull_request       -> preflight + build + test-build only (verification, never releases)
+#     workflow_dispatch -> preflight + build + test-build only (dry run, artifacts only)
 
 on:
   push:
@@ -18,14 +28,15 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: ci-deploy-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   PYTHON_VERSION: "3.12"
 
 jobs:
-  vet:
+  # ---------------------------------------------------------------- 1. preflight
+  preflight:
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
@@ -38,8 +49,11 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-      - name: Install analysis tooling
-        run: pip install ruff bandit pip-audit
+      - name: Install runtime + analysis tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ruff bandit pip-audit
       - name: Lint (ruff)
         run: ruff check app
       - name: Static security scan (bandit)
@@ -48,63 +62,63 @@ jobs:
         run: python -m compileall -q app
       - name: Dependency vulnerability audit (pip-audit)
         run: pip-audit -r requirements.txt --strict
+      - name: Unit / detection tests
+        run: python tools/pentest/test_alerts.py
       - name: Dependency review (PRs only)
         if: github.event_name == 'pull_request'
         uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: high
 
-  release-please:
-    needs: vet
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-22.04
-    timeout-minutes: 10
-    permissions:
-      contents: write
-      pull-requests: write
-    outputs:
-      release_created: ${{ steps.rp.outputs.release_created }}
-      tag_name: ${{ steps.rp.outputs.tag_name }}
-      version: ${{ steps.rp.outputs.version }}
-    steps:
-      - uses: googleapis/release-please-action@v5
-        id: rp
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          config-file: .github/release-please-config.json
-          manifest-file: .github/.release-please-manifest.json
-
-  # Computes the version + tag value only. The build/publish *decision* is made
-  # per-job via the github context (more robust than threading job-output flags).
-  meta:
-    needs: [vet, release-please]
-    if: always() && needs.vet.result == 'success'
+  # ---------------------------------------------------------------- 2. version
+  # Version is derived from git tags, not from version.txt (which is treated as a
+  # synced artifact, updated by the release job to match the last release).
+  #   - main push      -> auto patch-bump from the highest existing vX.Y.Z tag
+  #                       (v1 normalizes to 1.0.0, so the next release is 1.0.1)
+  #   - tag push (v*)  -> release exactly that tag, no bump
+  #   - PR / dispatch  -> <next>-ci.<run> dry-run version, never released
+  version:
+    needs: preflight
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     outputs:
       version: ${{ steps.v.outputs.version }}
       tag: ${{ steps.v.outputs.tag }}
+      is_release: ${{ steps.v.outputs.is_release }}
     steps:
+      - name: Legion Harden Runner
+        uses: OpenSource-For-Freedom/Legion_runner@v1.0.41
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need full tag history to find the latest version
       - id: v
         shell: bash
         run: |
-          REL="${{ needs.release-please.outputs.release_created }}"
+          set -euo pipefail
+          # Highest semver-ish tag, normalized to MAJOR.MINOR.PATCH (v1 -> 1.0.0).
+          LATEST="$(git tag -l 'v*' \
+            | sed -E 's/^v//' \
+            | awk -F. 'NF>=1 && $1 ~ /^[0-9]+$/ {printf "%d.%d.%d\n", $1, ($2==""?0:$2), ($3==""?0:$3)}' \
+            | sort -t. -k1,1n -k2,2n -k3,3n \
+            | tail -1)"
+          LATEST="${LATEST:-0.0.0}"
+          IFS=. read -r MA MI PA <<< "$LATEST"
+          NEXT="${MA}.${MI}.$((PA + 1))"
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            { echo "version=${GITHUB_REF_NAME#v}"; echo "tag=${GITHUB_REF_NAME}"; } >> "$GITHUB_OUTPUT"
-          elif [[ "$REL" == "true" ]]; then
-            { echo "version=${{ needs.release-please.outputs.version }}"; echo "tag=${{ needs.release-please.outputs.tag_name }}"; } >> "$GITHUB_OUTPUT"
+            VERSION="${GITHUB_REF_NAME#v}"
+            echo "version=$VERSION"; echo "tag=v$VERSION"; echo "is_release=true"
+          elif [[ "$GITHUB_REF" == refs/heads/main && "$GITHUB_EVENT_NAME" == push ]]; then
+            echo "::notice::latest tag = v${LATEST} -> next release = v${NEXT}"
+            echo "version=$NEXT"; echo "tag=v$NEXT"; echo "is_release=true"
           else
-            { echo "version=0.0.0-ci${GITHUB_RUN_NUMBER}"; echo "tag="; } >> "$GITHUB_OUTPUT"
-          fi
+            echo "version=${NEXT}-ci.${GITHUB_RUN_NUMBER}"; echo "tag="; echo "is_release=false"
+          fi >> "$GITHUB_OUTPUT"
 
+  # ---------------------------------------------------------------- 3+4. build + test-build (windows)
   build-windows:
-    needs: [vet, meta, release-please]
-    if: >-
-      always() && needs.vet.result == 'success' && needs.meta.result == 'success'
-      && ( github.event_name == 'pull_request'
-           || github.event_name == 'workflow_dispatch'
-           || startsWith(github.ref, 'refs/tags/v')
-           || needs.release-please.outputs.release_created == 'true' )
+    needs: [preflight, version]
     runs-on: windows-latest
     timeout-minutes: 40
     permissions:
@@ -112,13 +126,17 @@ jobs:
       id-token: write
       attestations: write
     env:
-      VERSION: ${{ needs.meta.outputs.version }}
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+      - name: Stamp resolved version into sources
+        shell: bash
+        run: |
+          python -c "import pathlib,re,os; v=os.environ['VERSION']; pathlib.Path('version.txt').write_text(v+'\n'); p=pathlib.Path('app/__init__.py'); p.write_text(re.sub(r'__version__\s*=\s*\".*?\"', f'__version__ = \"{v}\"', p.read_text()))"
       - name: Install dependencies
         shell: bash
         run: |
@@ -127,7 +145,7 @@ jobs:
       - name: Build (PyInstaller one-dir)
         shell: bash
         run: python -m PyInstaller packaging/windows/darkelf.spec --noconfirm --clean --distpath dist --workpath build/pyi
-      - name: Smoke test the packaged app (headless)
+      - name: Test build — smoke test the packaged app (headless)
         shell: pwsh
         run: |
           $env:DARKELF_NO_FILTERS = "1"
@@ -152,15 +170,19 @@ jobs:
       - name: Generate SBOM
         shell: bash
         run: cyclonedx-py environment --output-format json --outfile "out/sbom-windows-${VERSION}.json"
-      - name: Checksums
+      - name: Sign — SHA256 checksums
         shell: bash
         run: |
           cd out
-          for f in *.zip *.exe *.json; do [ -e "$f" ] && sha256sum "$f" > "$f.sha256"; done
-          cat *.sha256
-      - name: Attest build provenance
-        if: startsWith(github.ref, 'refs/tags/v') || needs.release-please.outputs.release_created == 'true'
-        uses: actions/attest-build-provenance@v4
+          : > SHA256SUMS-windows.txt
+          for f in *.zip *.exe *.json; do
+            [ -e "$f" ] || continue
+            sha256sum "$f" | tee -a SHA256SUMS-windows.txt
+          done
+          cat SHA256SUMS-windows.txt
+      - name: Attest build provenance (signed, releases only)
+        if: needs.version.outputs.is_release == 'true'
+        uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
             out/*.zip
@@ -172,14 +194,9 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+  # ---------------------------------------------------------------- 3+4. build + test-build (linux)
   build-linux:
-    needs: [vet, meta, release-please]
-    if: >-
-      always() && needs.vet.result == 'success' && needs.meta.result == 'success'
-      && ( github.event_name == 'pull_request'
-           || github.event_name == 'workflow_dispatch'
-           || startsWith(github.ref, 'refs/tags/v')
-           || needs.release-please.outputs.release_created == 'true' )
+    needs: [preflight, version]
     runs-on: ubuntu-22.04
     timeout-minutes: 40
     permissions:
@@ -187,7 +204,7 @@ jobs:
       id-token: write
       attestations: write
     env:
-      VERSION: ${{ needs.meta.outputs.version }}
+      VERSION: ${{ needs.version.outputs.version }}
     defaults:
       run:
         shell: bash
@@ -210,13 +227,16 @@ jobs:
             libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
             libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 \
             libgbm1 libegl1 libgl1 libasound2 fonts-liberation
+      - name: Stamp resolved version into sources
+        run: |
+          python -c "import pathlib,re,os; v=os.environ['VERSION']; pathlib.Path('version.txt').write_text(v+'\n'); p=pathlib.Path('app/__init__.py'); p.write_text(re.sub(r'__version__\s*=\s*\".*?\"', f'__version__ = \"{v}\"', p.read_text()))"
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller cyclonedx-bom
       - name: Build (PyInstaller one-dir)
         run: python -m PyInstaller packaging/windows/darkelf.spec --noconfirm --clean --distpath dist --workpath build/pyi
-      - name: Smoke test the packaged app (xvfb headless)
+      - name: Test build — smoke test the packaged app (xvfb headless)
         env:
           DARKELF_NO_FILTERS: "1"
           DARKELF_AUTOQUIT: "4000"
@@ -236,14 +256,18 @@ jobs:
           lintian out/*.deb || true
       - name: Generate SBOM
         run: cyclonedx-py environment --output-format json --outfile "out/sbom-linux-${VERSION}.json"
-      - name: Checksums
+      - name: Sign — SHA256 checksums
         run: |
           cd out
-          for f in *.deb *.json; do [ -e "$f" ] && sha256sum "$f" > "$f.sha256"; done
-          cat *.sha256
-      - name: Attest build provenance
-        if: startsWith(github.ref, 'refs/tags/v') || needs.release-please.outputs.release_created == 'true'
-        uses: actions/attest-build-provenance@v4
+          : > SHA256SUMS-linux.txt
+          for f in *.deb *.json; do
+            [ -e "$f" ] || continue
+            sha256sum "$f" | tee -a SHA256SUMS-linux.txt
+          done
+          cat SHA256SUMS-linux.txt
+      - name: Attest build provenance (signed, releases only)
+        if: needs.version.outputs.is_release == 'true'
+        uses: actions/attest-build-provenance@v2
         with:
           subject-path: out/*.deb
       - uses: actions/upload-artifact@v4
@@ -253,12 +277,65 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
-  publish:
-    needs: [meta, build-windows, build-linux, release-please]
+  # ---------------------------------------------------------------- 5. bump + tag
+  # main push only: commit the patch-bumped version.txt + __init__.py back to main
+  # and tag THAT commit, so the release tag points at the code carrying its version.
+  # Tag-driven (refs/tags/v*) runs skip this — the tag already exists.
+  bump-and-tag:
+    needs: [version, build-windows, build-linux]
     if: >-
-      always() && needs.build-windows.result == 'success' && needs.build-linux.result == 'success'
-      && ( startsWith(github.ref, 'refs/tags/v')
-           || needs.release-please.outputs.release_created == 'true' )
+      needs.version.outputs.is_release == 'true'
+      && github.event_name == 'push'
+      && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      created: ${{ steps.tag.outputs.created }}
+      tag: ${{ needs.version.outputs.tag }}
+    steps:
+      - name: Legion Harden Runner
+        uses: OpenSource-For-Freedom/Legion_runner@v1.0.41
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: tag
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::notice::${TAG} already exists — skipping (no new release)."
+            echo "created=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Persist the resolved version (GITHUB_TOKEN pushes don't re-trigger CI;
+          # [skip ci] is belt-and-suspenders against any future PAT-based trigger).
+          python -c "import pathlib,re,os; v=os.environ['VERSION']; pathlib.Path('version.txt').write_text(v+'\n'); p=pathlib.Path('app/__init__.py'); p.write_text(re.sub(r'__version__\s*=\s*\".*?\"', f'__version__ = \"{v}\"', p.read_text()))"
+          git add version.txt app/__init__.py
+          git commit -m "chore(release): ${TAG} [skip ci]"
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          git push origin HEAD:main
+          git push origin "${TAG}"
+          echo "created=true" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------- 6. release (only if it passes)
+  release:
+    needs: [version, build-windows, build-linux, bump-and-tag]
+    # Releases on either: a freshly-created tag from main, OR a manual tag push.
+    if: >-
+      always()
+      && needs.build-windows.result == 'success'
+      && needs.build-linux.result == 'success'
+      && (
+           needs.bump-and-tag.outputs.created == 'true'
+           || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+         )
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     permissions:
@@ -271,24 +348,34 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Collect + verify checksums
+      - name: Collect assets + verify SHA256 signatures
         run: |
+          set -euo pipefail
           mkdir -p release
           find artifacts -type f -exec cp {} release/ \;
           cd release
-          echo "Verifying SHA256 sums..."
+          echo "Verifying SHA256SUMS..."
           fail=0
-          for s in *.sha256; do sha256sum -c "$s" || fail=1; done
-          [ "$fail" -eq 0 ] || { echo "checksum verification failed"; exit 1; }
+          for s in SHA256SUMS-*.txt; do
+            [ -e "$s" ] || continue
+            echo "== $s =="
+            sha256sum -c "$s" || fail=1
+          done
+          if [ "$fail" -ne 0 ]; then echo "::error::checksum verification failed"; exit 1; fi
+          # Aggregate, de-duplicated manifest across both platforms.
+          cat SHA256SUMS-*.txt | sort -u > SHA256SUMS.txt
+          echo "---- combined SHA256SUMS.txt ----"; cat SHA256SUMS.txt
           ls -la
-      - name: Upload assets to the release
-        uses: softprops/action-gh-release@v3
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.meta.outputs.tag }}
-          fail_on_unmatched_files: false
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: Darkelf Shadow ${{ needs.version.outputs.tag }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
           files: |
             release/*.exe
             release/*.zip
             release/*.deb
             release/*.json
-            release/*.sha256
+            release/SHA256SUMS.txt
