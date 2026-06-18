@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Darkelf Shadow
+GenericName=Web Browser
+Comment=Hardened, ephemeral, in-memory privacy browser
+Exec=darkelf-shadow %u
+Icon=darkelf-shadow
+Terminal=false
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+StartupNotify=true
