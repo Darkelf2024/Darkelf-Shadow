@@ -282,7 +282,7 @@ jobs:
           [ "$fail" -eq 0 ] || { echo "checksum verification failed"; exit 1; }
           ls -la
       - name: Upload assets to the release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.meta.outputs.tag }}
           fail_on_unmatched_files: false
