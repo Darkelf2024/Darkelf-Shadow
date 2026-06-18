@@ -66,9 +66,6 @@ from shadow.utils import (
     BOOTUP_CANVAS_SEED
 )
 
-devnull = open(os.devnull, 'w')
-os.dup2(devnull.fileno(), sys.stderr.fileno())
-
 # --- Custom Icon helpers (ported from fixed2) ---
 def make_icon(color=None, size=24):
 
@@ -2265,24 +2262,6 @@ class DarkelfBrowser(QMainWindow):
         self.debounce_cleanup()
 
         
-    def close_tab(self, i=None):
-        if i is None:
-            i = self.tabs.currentIndex()
-
-        if i < 0:
-            return
-
-        self.tabs.removeTab(i)
-
-        if self.tabs.count() == 0:
-            self._add_tab(home=True)
-
-        new_view = self.current_view()
-        if new_view:
-            new_view.setFocus()
-
-        self.debounce_cleanup()
-            
     def reload_page(self):
         view = self.tabs.currentWidget()
         if view:
@@ -3229,7 +3208,13 @@ class DarkelfBrowser(QMainWindow):
         idx = self.tabs.addTab(view, "Source")
         self.tabs.setCurrentIndex(idx)
 
-    def close_tab(self, idx):
+    def close_tab(self, idx=None):
+        if idx is None:
+            idx = self.tabs.currentIndex()
+
+        if idx < 0:
+            return
+
         w = self.tabs.widget(idx)
 
         self.tabs.removeTab(idx)
@@ -3257,7 +3242,13 @@ class DarkelfBrowser(QMainWindow):
         # reopen homepage if all tabs closed
         if self.tabs.count() == 0:
             self._add_tab(home=True)
-            
+
+        new_view = self.current_view()
+        if new_view:
+            new_view.setFocus()
+
+        self.debounce_cleanup()
+
     def show_hotkey_help(self):
 
         html = f"""
@@ -3605,17 +3596,7 @@ class DarkelfBrowser(QMainWindow):
         view.page().findText(
             self._last_find_text
         )
-        
-    def _shortcut(self, keys, callback):
-        if isinstance(keys, str):
-            keys = [keys]
 
-        for key in keys:
-            sc = QShortcut(QKeySequence(key), self)
-            sc.setContext(Qt.ApplicationShortcut)
-            sc.activated.connect(callback)
-            self._shortcuts.append(sc)
-        
     def reset_zoom(self):
         v = self.current_view()
         if v:
@@ -3730,8 +3711,9 @@ class DarkelfBrowser(QMainWindow):
                     except Exception as e:
                         print("Error:", e)
 
-            # Use the default profile once instead of per-tab
-            profile = QWebEngineProfile.defaultProfile()
+            # Wipe the ACTUAL browsing profile (the off-the-record profile
+            # created in boot.py), not the unused default profile.
+            profile = self.shared_profile
 
             profile.cookieStore().deleteAllCookies()
             profile.clearHttpCache()
@@ -3811,96 +3793,3 @@ class DarkelfBrowser(QMainWindow):
         except Exception as e:
             print(e)
             pass
-        
-if __name__ == "__main__":
-
-    app = QApplication(sys.argv)
-    app.setStyle("Fusion")
-
-    # ===== PALETTE =====
-    palette = QPalette()
-    palette.setColor(QPalette.Window, QColor("#0a0b10"))
-    palette.setColor(QPalette.WindowText, QColor("#eafaf0"))
-    palette.setColor(QPalette.Base, QColor("#12141b"))
-    palette.setColor(QPalette.AlternateBase, QColor("#0f1114"))
-    palette.setColor(QPalette.ToolTipBase, QColor("#eafaf0"))
-    palette.setColor(QPalette.ToolTipText, QColor("#0a0b10"))
-    palette.setColor(QPalette.Text, QColor("#eafaf0"))
-    palette.setColor(QPalette.Button, QColor("#0f1114"))
-    palette.setColor(QPalette.ButtonText, QColor("#eafaf0"))
-    palette.setColor(QPalette.Highlight, QColor("#A855F7"))
-    palette.setColor(QPalette.HighlightedText, QColor("#0a0b10"))
-    app.setPalette(palette)
-
-    app.setStyleSheet(app.styleSheet() + """
-    QMenu { background: qlineargradient(x1:0,y1:0,x2:0,y1:1, stop:0 #171b20, stop:1 #15191c);
-    border: 1px solid #1a1f23; border-radius: 6px; padding: 6px;}
-    QMenu::separator{ height:1px; background:#23292e; margin:6px 8px; }
-    QMenu::item{ color: #e5e7eb; padding:6px 16px; border-radius:8px; background:transparent;}
-    QMenu::item:selected, QMenu::item:hover{background:#A855F7;color:#181a1b;font-weight:bold;}
-    QMenu::item:disabled {color:#7f8c8d;background:transparent;}
-    QToolTip{background:#161a1e;color:#e5e7eb;border:1px solid #22292f; padding:6px 8px;}
-    """)
-
-    # ===== SPLASH =====
-    splash = BootSplash()
-    splash.show()
-    app.processEvents()
-
-    # ===== INIT (NO TOR) =====
-    splash.status.setText("Initializing network...")
-    app.processEvents()
-
-    # ===== PROFILE =====
-    splash.status.setText("Preparing secure profile...")
-    app.processEvents()
-
-    profile = QWebEngineProfile("", app)
-    profile.setHttpCacheType(QWebEngineProfile.MemoryHttpCache)
-    profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
-    profile.setHttpAcceptLanguage("en-US,en;q=0.9")
-
-    settings = profile.settings()
-    settings.setAttribute(QWebEngineSettings.LocalStorageEnabled, True)
-    settings.setAttribute(QWebEngineSettings.PluginsEnabled, False)
-    settings.setAttribute(QWebEngineSettings.HyperlinkAuditingEnabled, False)
-    settings.setAttribute(QWebEngineSettings.JavascriptCanOpenWindows, False)
-    settings.setAttribute(QWebEngineSettings.JavascriptCanAccessClipboard, False)
-    settings.setAttribute(QWebEngineSettings.LocalContentCanAccessRemoteUrls, False)
-    settings.setAttribute(QWebEngineSettings.LocalContentCanAccessFileUrls, False)
-    settings.setAttribute(QWebEngineSettings.FullScreenSupportEnabled, True)
-
-    # ===== SCRIPT INJECTION =====
-    script = QWebEngineScript()
-    script.setName("darkelf_global_patch")
-    script.setInjectionPoint(QWebEngineScript.DocumentCreation)
-    script.setWorldId(QWebEngineScript.MainWorld)
-    script.setRunsOnSubFrames(True)
-    profile.scripts().insert(script)
-
-    # ===== WORKER =====
-    worker = BootWorker()
-    splash._anim = None
-
-    def update_progress(val, text):
-        splash.status.setText(text)
-
-        anim = QPropertyAnimation(splash.bar, b"value")
-        anim.setDuration(300)
-        anim.setStartValue(splash.bar.value())
-        anim.setEndValue(val)
-        anim.start()
-
-        splash._anim = anim
-
-    def boot_done(ai):
-        splash.close()
-        w = DarkelfBrowser(profile)
-        w.show()
-
-    worker.progress.connect(update_progress)
-    worker.finished.connect(boot_done)
-
-    worker.start()
-
-    sys.exit(app.exec())

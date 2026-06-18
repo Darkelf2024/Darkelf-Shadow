@@ -1,0 +1,294 @@
+name: release
+
+# Semantic release pipeline.
+#   push to main      -> vet + release-please; on a merged release PR, build
+#                        Windows + Linux and publish the GitHub Release.
+#   push tag v*       -> manual/tag-driven build + publish (fallback).
+#   pull_request      -> vet + build for verification (no publish).
+#   workflow_dispatch -> vet + build, artifacts only (dry-run, no publish).
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  vet:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Legion Harden Runner
+        uses: OpenSource-For-Freedom/Legion_runner@v1.0.41
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install analysis tooling
+        run: pip install ruff bandit pip-audit
+      - name: Lint (ruff)
+        run: ruff check app
+      - name: Static security scan (bandit)
+        run: bandit -r app --severity-level medium --confidence-level medium
+      - name: Byte-compile all sources
+        run: python -m compileall -q app
+      - name: Dependency vulnerability audit (pip-audit)
+        run: pip-audit -r requirements.txt --strict
+      - name: Dependency review (PRs only)
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
+  release-please:
+    needs: vet
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+      version: ${{ steps.rp.outputs.version }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: rp
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: .github/release-please-config.json
+          manifest-file: .github/.release-please-manifest.json
+
+  # Computes the version + tag value only. The build/publish *decision* is made
+  # per-job via the github context (more robust than threading job-output flags).
+  meta:
+    needs: [vet, release-please]
+    if: always() && needs.vet.result == 'success'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - id: v
+        shell: bash
+        run: |
+          REL="${{ needs.release-please.outputs.release_created }}"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            { echo "version=${GITHUB_REF_NAME#v}"; echo "tag=${GITHUB_REF_NAME}"; } >> "$GITHUB_OUTPUT"
+          elif [[ "$REL" == "true" ]]; then
+            { echo "version=${{ needs.release-please.outputs.version }}"; echo "tag=${{ needs.release-please.outputs.tag_name }}"; } >> "$GITHUB_OUTPUT"
+          else
+            { echo "version=0.0.0-ci${GITHUB_RUN_NUMBER}"; echo "tag="; } >> "$GITHUB_OUTPUT"
+          fi
+
+  build-windows:
+    needs: [vet, meta, release-please]
+    if: >-
+      always() && needs.vet.result == 'success' && needs.meta.result == 'success'
+      && ( github.event_name == 'pull_request'
+           || github.event_name == 'workflow_dispatch'
+           || startsWith(github.ref, 'refs/tags/v')
+           || needs.release-please.outputs.release_created == 'true' )
+    runs-on: windows-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller cyclonedx-bom
+      - name: Build (PyInstaller one-dir)
+        shell: bash
+        run: python -m PyInstaller packaging/windows/darkelf.spec --noconfirm --clean --distpath dist --workpath build/pyi
+      - name: Smoke test the packaged app (headless)
+        shell: pwsh
+        run: |
+          $env:DARKELF_NO_FILTERS = "1"
+          $env:DARKELF_AUTOQUIT = "4000"
+          $env:QTWEBENGINE_DISABLE_SANDBOX = "1"
+          $env:DARKELF_EXTRA_CHROMIUM_FLAGS = "--no-sandbox --disable-gpu --disable-software-rasterizer"
+          $p = Start-Process -FilePath "dist\DarkelfShadow\DarkelfShadow.exe" -PassThru
+          if (-not $p.WaitForExit(120000)) { $p.Kill(); throw "smoke test timed out" }
+          if ($p.ExitCode -ne 0) { throw "smoke test failed: exit $($p.ExitCode)" }
+          Write-Host "smoke test OK"
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$env:VERSION" "packaging\windows\darkelf.iss"
+      - name: Package portable zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          Compress-Archive -Path "dist\DarkelfShadow\*" -DestinationPath "out\DarkelfShadow-windows-x64-$env:VERSION.zip"
+          Copy-Item "dist\installer\DarkelfShadow-Setup-$env:VERSION.exe" "out\"
+      - name: Generate SBOM
+        shell: bash
+        run: cyclonedx-py environment --output-format json --outfile "out/sbom-windows-${VERSION}.json"
+      - name: Checksums
+        shell: bash
+        run: |
+          cd out
+          for f in *.zip *.exe *.json; do [ -e "$f" ] && sha256sum "$f" > "$f.sha256"; done
+          cat *.sha256
+      - name: Attest build provenance
+        if: startsWith(github.ref, 'refs/tags/v') || needs.release-please.outputs.release_created == 'true'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            out/*.zip
+            out/*.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darkelf-windows
+          path: out/
+          retention-days: 14
+          if-no-files-found: error
+
+  build-linux:
+    needs: [vet, meta, release-please]
+    if: >-
+      always() && needs.vet.result == 'success' && needs.meta.result == 'success'
+      && ( github.event_name == 'pull_request'
+           || github.event_name == 'workflow_dispatch'
+           || startsWith(github.ref, 'refs/tags/v')
+           || needs.release-please.outputs.release_created == 'true' )
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Legion Harden Runner
+        uses: OpenSource-For-Freedom/Legion_runner@v1.0.41
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install runtime + test libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb dpkg-dev \
+            libnss3 libnspr4 libxcomposite1 libxdamage1 libxrandr2 \
+            libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
+            libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 \
+            libgbm1 libegl1 libgl1 libasound2 fonts-liberation
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller cyclonedx-bom
+      - name: Build (PyInstaller one-dir)
+        run: python -m PyInstaller packaging/windows/darkelf.spec --noconfirm --clean --distpath dist --workpath build/pyi
+      - name: Smoke test the packaged app (xvfb headless)
+        env:
+          DARKELF_NO_FILTERS: "1"
+          DARKELF_AUTOQUIT: "4000"
+          QTWEBENGINE_DISABLE_SANDBOX: "1"
+          DARKELF_EXTRA_CHROMIUM_FLAGS: "--no-sandbox --disable-gpu"
+          QT_QPA_PLATFORM: "xcb"
+        run: |
+          xvfb-run -a -s "-screen 0 1280x1024x24" ./dist/DarkelfShadow/DarkelfShadow
+          echo "smoke test OK (exit $?)"
+      - name: Build .deb
+        run: |
+          mkdir -p out
+          bash packaging/linux/build_deb.sh "${VERSION}" "dist" "out"
+      - name: Lint the .deb (lintian, non-blocking)
+        run: |
+          sudo apt-get install -y --no-install-recommends lintian
+          lintian out/*.deb || true
+      - name: Generate SBOM
+        run: cyclonedx-py environment --output-format json --outfile "out/sbom-linux-${VERSION}.json"
+      - name: Checksums
+        run: |
+          cd out
+          for f in *.deb *.json; do [ -e "$f" ] && sha256sum "$f" > "$f.sha256"; done
+          cat *.sha256
+      - name: Attest build provenance
+        if: startsWith(github.ref, 'refs/tags/v') || needs.release-please.outputs.release_created == 'true'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: out/*.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darkelf-linux
+          path: out/
+          retention-days: 14
+          if-no-files-found: error
+
+  publish:
+    needs: [meta, build-windows, build-linux, release-please]
+    if: >-
+      always() && needs.build-windows.result == 'success' && needs.build-linux.result == 'success'
+      && ( startsWith(github.ref, 'refs/tags/v')
+           || needs.release-please.outputs.release_created == 'true' )
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Legion Harden Runner
+        uses: OpenSource-For-Freedom/Legion_runner@v1.0.41
+        with:
+          egress-policy: audit
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Collect + verify checksums
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec cp {} release/ \;
+          cd release
+          echo "Verifying SHA256 sums..."
+          fail=0
+          for s in *.sha256; do sha256sum -c "$s" || fail=1; done
+          [ "$fail" -eq 0 ] || { echo "checksum verification failed"; exit 1; }
+          ls -la
+      - name: Upload assets to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.meta.outputs.tag }}
+          fail_on_unmatched_files: false
+          files: |
+            release/*.exe
+            release/*.zip
+            release/*.deb
+            release/*.json
+            release/*.sha256

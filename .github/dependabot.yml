@@ -1,0 +1,17 @@
+version: 2
+updates:
+  # Keep GitHub Actions pinned references up to date (supply-chain hygiene).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels: ["ci", "dependencies"]
+
+  # Keep Python dependencies (requirements.txt) patched.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels: ["dependencies"]
