@@ -11,6 +11,10 @@
 #define MyAppPublisher "Darkelf Project"
 #define MyAppExeName "DarkelfShadow.exe"
 
+; Inno resolves relative paths against THIS script's directory, not the CWD.
+; Anchor everything to the repo root (two levels up from packaging/windows).
+#define ROOT SourcePath + "..\.."
+
 [Setup]
 AppId={{8E2F6A4C-1D3B-4E9A-9C77-DA2KELF5HADOW}}
 AppName={#MyAppName}
@@ -19,7 +23,7 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\DarkelfShadow
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
-OutputDir=dist\installer
+OutputDir={#ROOT}\dist\installer
 OutputBaseFilename=DarkelfShadow-Setup-{#MyAppVersion}
 Compression=lzma2/max
 SolidCompression=yes
@@ -28,7 +32,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 WizardStyle=modern
-SetupIconFile=app\frontend\assets\darkelf-mark.ico
+SetupIconFile={#ROOT}\app\frontend\assets\darkelf-mark.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
 [Languages]
@@ -38,7 +42,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "dist\DarkelfShadow\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#ROOT}\dist\DarkelfShadow\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
