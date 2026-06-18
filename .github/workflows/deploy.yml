@@ -86,6 +86,10 @@ jobs:
       tag: ${{ steps.v.outputs.tag }}
       is_release: ${{ steps.v.outputs.is_release }}
     steps:
+      - name: Legion Harden Runner
+        uses: OpenSource-For-Freedom/Legion_runner@v1.0.41
+        with:
+          egress-policy: audit
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # need full tag history to find the latest version
@@ -291,6 +295,10 @@ jobs:
       created: ${{ steps.tag.outputs.created }}
       tag: ${{ needs.version.outputs.tag }}
     steps:
+      - name: Legion Harden Runner
+        uses: OpenSource-For-Freedom/Legion_runner@v1.0.41
+        with:
+          egress-policy: audit
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
