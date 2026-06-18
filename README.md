@@ -1,11 +1,5 @@
 # 🕶️ Darkelf Shadow  [![PyPI Downloads](https://static.pepy.tech/personalized-badge/darkelf-shadow?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/darkelf-shadow)
 
-<p align="center">
-  <img src="https://github.com/Darkelf2024/Darkelf-Shadow/blob/main/sh_hm.png"
-       alt="Darkelf Shadow Browser"
-       width="900">
-</p>
-
 **Fully Hardened • Ephemeral • Zero-Trace Browser (Qt WebEngine / Chromium Core)**
 
 Darkelf Shadow v4.6.2 is a defense-in-depth, privacy-hardened web browser engineered to eliminate persistent tracking, reduce attack surface, and actively defend against modern web threats — all while operating entirely in-memory.
