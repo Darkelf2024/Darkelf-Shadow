@@ -724,7 +724,7 @@ class EasyListEngine:
             if (
                 any(k in req_host for k in high_signal)
                 and
-                not fp_host.endswith("youtube.com")
+                not (fp_host == "youtube.com" or fp_host.endswith(".youtube.com"))
             ):
                 return True
 

@@ -10,7 +10,7 @@ import re
 import shutil
 
 from PySide6.QtCore import QObject, Signal, Property, Slot, QTimer, QUrl
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlsplit
 
 _DARKELF_DIR = os.path.join(os.path.expanduser("~"), ".darkelf")
 _BOOKMARKS_PATH = os.path.join(_DARKELF_DIR, "bookmarks.json")
@@ -312,7 +312,7 @@ class DarkelfController(QObject):
     @Slot(str, str)
     def addBookmark(self, title: str, url: str):
         url = (url or "").strip()
-        if not url or url.startswith("https://darkelf.home"):
+        if not url or urlsplit(url).hostname == "darkelf.home":
             return
         if any(b.get("url") == url for b in self._bookmarks):
             return
