@@ -1,15 +1,15 @@
-# darkelf.spec -- PyInstaller spec for Darkelf Shadow (Windows)
+# darkelf.spec -- PyInstaller spec for Darkelf Shadow (Linux)
 #
 # Build from repo root:
-#     pyinstaller packaging/windows/darkelf.spec --noconfirm
+#     pyinstaller packaging/linux/darkelf.spec --noconfirm
 #
-# Produces a one-dir bundle in dist/DarkelfShadow/ with DarkelfShadow.exe,
-# which packaging/windows/darkelf.iss then wraps into an installer.
+# Produces a one-dir bundle in dist/DarkelfShadow/ with the DarkelfShadow ELF,
+# which packaging/linux/build_deb.sh then wraps into a .deb.
 #
-# This is the WINDOWS build and is deliberately separate from the Linux spec
-# (packaging/linux/darkelf.spec): it embeds the .ico app icon and has no Mesa/
-# libgbm handling (that is a Linux-only concern). Keep the two specs in sync
-# for shared concerns (entry point, datas, hiddenimports, excludes).
+# This is the LINUX build and is deliberately separate from the Windows spec
+# (packaging/windows/darkelf.spec): no .ico embedding (the desktop icon is
+# installed by the .deb), and the stale bundled libgbm is dropped so the app
+# uses the host Mesa stack (see below).
 
 import os
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules  # noqa: F401
@@ -25,12 +25,6 @@ datas = [
 _assets = os.path.join(APP, "frontend", "assets")
 if os.path.isdir(_assets):
     datas.append((_assets, os.path.join("frontend", "assets")))
-
-# Cutout mark = the app/taskbar icon (high contrast on dark taskbars).
-_icon = os.path.join(APP, "frontend", "assets", "darkelf-mark.ico")
-if not os.path.exists(_icon):
-    _icon = os.path.join(APP, "frontend", "assets", "darkelf.ico")
-_icon = _icon if os.path.exists(_icon) else None
 
 hiddenimports = [
     "PySide6.QtWebEngineQuick",
@@ -57,6 +51,15 @@ a = Analysis(
     noarchive=False,
 )
 
+# Drop the bundled libgbm.so.1. PyInstaller vendors the build host's copy, which
+# on a newer end-user Mesa cannot load the system DRI drivers ("did not find
+# extension DRI_Mesa version 1" / "EGL: Failed to initialize GBM device"), so
+# GPU init fails and the window never appears. Removing it makes the dynamic
+# loader fall back to the host's libgbm1 (a .deb runtime dependency), which
+# matches the installed DRI drivers. build_deb.sh repeats this defensively.
+a.binaries = [b for b in a.binaries
+              if os.path.basename(b[0]).lower() != "libgbm.so.1"]
+
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -69,9 +72,10 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=False,           # GUI app, no console window
+    console=False,           # GUI app, no controlling terminal
     disable_windowed_traceback=False,
-    icon=_icon,
+    # No icon= on Linux: ELF carries no icon; the launcher icon is installed
+    # by the .deb (usr/share/icons/hicolor/...) via build_deb.sh.
 )
 
 coll = COLLECT(

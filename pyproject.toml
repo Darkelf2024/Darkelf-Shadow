@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "darkelf-shadow"
+dynamic = ["version"]
+description = "Hardened, ephemeral, in-memory privacy browser (Qt WebEngine / Chromium core)"
+readme = "README.md"
+# PySide6 6.11 is Requires-Python >=3.10,<3.15 (cp310-abi3 wheels run on
+# 3.10-3.14). 3.14 is the newest shippable; we mirror the supported range.
+requires-python = ">=3.10,<3.15"
+license = { text = "LGPL-3.0-or-later" }
+authors = [{ name = "Dr. Kevin Moore" }]
+maintainers = [{ name = "Darkelf Project" }]
+keywords = ["privacy", "browser", "security", "qt", "webengine", "chromium", "ephemeral"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: GNU Lesser General Public License v3 or later (LGPLv3+)",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Internet :: WWW/HTTP :: Browsers",
+    "Topic :: Security",
+]
+dependencies = ["PySide6>=6.11.1,<6.12"]
+
+[project.optional-dependencies]
+test = ["pytest>=7", "flake8>=6"]
+
+[project.urls]
+Homepage = "https://github.com/oracle-actual/Darkelf-Shadow"
+Repository = "https://github.com/oracle-actual/Darkelf-Shadow"
+
+[project.scripts]
+darkelf-shadow = "app:main"
+
+[tool.setuptools]
+package-dir = { "" = "app" }
+py-modules = ["app"]
+
+[tool.setuptools.packages.find]
+where = ["app"]
+include = ["backend*", "frontend*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+frontend = ["qml/*.qml", "assets/*"]
+
+[tool.setuptools.dynamic]
+version = { file = "version.txt" }

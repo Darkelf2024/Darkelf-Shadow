@@ -32,7 +32,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PYTHON_VERSION: "3.12"
+  PYTHON_VERSION: "3.14"   # newest Python PySide6 6.11 supports (<3.15)
 
 jobs:
   # ---------------------------------------------------------------- 1. preflight
@@ -222,7 +222,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            xvfb dpkg-dev \
+            xvfb \
             libnss3 libnspr4 libxcomposite1 libxdamage1 libxrandr2 \
             libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
             libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 \
@@ -235,7 +235,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller cyclonedx-bom
       - name: Build (PyInstaller one-dir)
-        run: python -m PyInstaller packaging/windows/darkelf.spec --noconfirm --clean --distpath dist --workpath build/pyi
+        run: python -m PyInstaller packaging/linux/darkelf.spec --noconfirm --clean --distpath dist --workpath build/pyi
       - name: Test build — smoke test the packaged app (xvfb headless)
         env:
           DARKELF_NO_FILTERS: "1"
@@ -246,21 +246,17 @@ jobs:
         run: |
           xvfb-run -a -s "-screen 0 1280x1024x24" ./dist/DarkelfShadow/DarkelfShadow
           echo "smoke test OK (exit $?)"
-      - name: Build .deb
+      - name: Build AppImage
         run: |
           mkdir -p out
-          bash packaging/linux/build_deb.sh "${VERSION}" "dist" "out"
-      - name: Lint the .deb (lintian, non-blocking)
-        run: |
-          sudo apt-get install -y --no-install-recommends lintian
-          lintian out/*.deb || true
+          bash packaging/linux/build_appimage.sh "${VERSION}" "dist" "out"
       - name: Generate SBOM
         run: cyclonedx-py environment --output-format json -o "out/sbom-linux-${VERSION}.json"
       - name: Sign — SHA256 checksums
         run: |
           cd out
           : > SHA256SUMS-linux.txt
-          for f in *.deb *.json; do
+          for f in *.AppImage *.json; do
             [ -e "$f" ] || continue
             sha256sum "$f" | tee -a SHA256SUMS-linux.txt
           done
@@ -269,7 +265,7 @@ jobs:
         if: needs.version.outputs.is_release == 'true'
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: out/*.deb
+          subject-path: out/*.AppImage
       - uses: actions/upload-artifact@v4
         with:
           name: darkelf-linux
@@ -376,6 +372,6 @@ jobs:
           files: |
             release/*.exe
             release/*.zip
-            release/*.deb
+            release/*.AppImage
             release/*.json
             release/SHA256SUMS.txt
