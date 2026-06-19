@@ -52,7 +52,7 @@ jobs:
       - name: Install runtime + analysis tooling
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.lock --require-hashes
           pip install ruff bandit pip-audit
       - name: Lint (ruff)
         run: ruff check app
@@ -61,7 +61,7 @@ jobs:
       - name: Byte-compile all sources
         run: python -m compileall -q app
       - name: Dependency vulnerability audit (pip-audit)
-        run: pip-audit -r requirements.txt --strict
+        run: pip-audit -r requirements.lock --strict
       - name: Unit / detection tests
         run: python tools/pentest/test_alerts.py
       - name: Dependency review (PRs only)
@@ -141,7 +141,8 @@ jobs:
         shell: bash
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller cyclonedx-bom
+          pip install -r requirements.lock --require-hashes
+          pip install pyinstaller cyclonedx-bom
       - name: Build (PyInstaller one-dir)
         shell: bash
         run: python -m PyInstaller packaging/windows/darkelf.spec --noconfirm --clean --distpath dist --workpath build/pyi
@@ -233,7 +234,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller cyclonedx-bom
+          pip install -r requirements.lock --require-hashes
+          pip install pyinstaller cyclonedx-bom
       - name: Build (PyInstaller one-dir)
         run: python -m PyInstaller packaging/linux/darkelf.spec --noconfirm --clean --distpath dist --workpath build/pyi
       - name: Test build — smoke test the packaged app (xvfb headless)
@@ -252,6 +254,13 @@ jobs:
           bash packaging/linux/build_appimage.sh "${VERSION}" "dist" "out"
       - name: Generate SBOM
         run: cyclonedx-py environment --output-format json -o "out/sbom-linux-${VERSION}.json"
+      - name: Scan SBOM for vulnerabilities (grype)
+        # The CycloneDX SBOM lists the Python packages actually frozen into the
+        # build (identical set on both OSes), so scanning the Linux SBOM covers
+        # the dependency CVE surface. Fails the build on a high or critical CVE.
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b "$RUNNER_TEMP/grype-bin"
+          "$RUNNER_TEMP/grype-bin/grype" "sbom:out/sbom-linux-${VERSION}.json" --fail-on high
       - name: Sign — SHA256 checksums
         run: |
           cd out
@@ -375,3 +384,41 @@ jobs:
             release/*.AppImage
             release/*.json
             release/SHA256SUMS.txt
+
+  # ---------------------------------------------------------------- 7. publish to PyPI
+  # Builds the sdist + wheel and uploads them to PyPI using OIDC trusted
+  # publishing (no stored API token). Runs only for real releases.
+  #
+  # One-time setup on PyPI: create the project and add a trusted publisher for
+  #   owner: oracle-actual   repo: Darkelf-Shadow   workflow: deploy.yml
+  # Leave the publisher's "environment" field blank to match this job. See
+  # https://docs.pypi.org/trusted-publishers/ . You can optionally add a
+  # GitHub Environment here later to require manual approval before a release.
+  publish-pypi:
+    name: Publish to PyPI (trusted publishing)
+    needs: [version, build-windows, build-linux]
+    if: needs.version.outputs.is_release == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      id-token: write   # OIDC token for PyPI trusted publishing
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Legion Harden Runner
+        uses: OpenSource-For-Freedom/Legion_runner@v1.0.41
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Stamp resolved version into sources
+        run: |
+          python -c "import pathlib,re,os; v=os.environ['VERSION']; pathlib.Path('version.txt').write_text(v+'\n'); p=pathlib.Path('app/__init__.py'); p.write_text(re.sub(r'__version__\s*=\s*\".*?\"', f'__version__ = \"{v}\"', p.read_text()))"
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

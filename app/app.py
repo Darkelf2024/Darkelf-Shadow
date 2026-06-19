@@ -124,7 +124,10 @@ def main() -> int:
     if _LOG_PATH:
         print("Session log:", _LOG_PATH)
     print("OffTheRecord:", engine.profile.isOffTheRecord())
-    print("Loaded network rules:", len(engine.engine.network_rules))
+    if engine.filters_ready.is_set():
+        print("Loaded network rules:", len(engine.engine.network_rules))
+    else:
+        print("Filters: loading in background...")
 
     # Bridge.
     controller = DarkelfController(app, engine)
