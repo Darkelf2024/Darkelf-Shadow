@@ -250,4 +250,4 @@ Darkelf Project — Shadow Edition
 
 ## Special Thanks 
 
-Thank You - Mecha Comet Team, Tim Burns & 404 Yeti!
+Thank You - Mecha Comet Team, Tim Burns, Oracle-actual and 404 Yeti!
