@@ -32,7 +32,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PYTHON_VERSION: "3.12"
+  PYTHON_VERSION: "3.14"   # newest Python PySide6 6.11 supports (<3.15)
 
 jobs:
   # ---------------------------------------------------------------- 1. preflight
@@ -44,15 +44,15 @@ jobs:
         uses: OpenSource-For-Freedom/Legion_runner@v1.0.41
         with:
           egress-policy: audit
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6.0.3
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
       - name: Install runtime + analysis tooling
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.lock --require-hashes
           pip install ruff bandit pip-audit
       - name: Lint (ruff)
         run: ruff check app
@@ -61,7 +61,7 @@ jobs:
       - name: Byte-compile all sources
         run: python -m compileall -q app
       - name: Dependency vulnerability audit (pip-audit)
-        run: pip-audit -r requirements.txt --strict
+        run: pip-audit -r requirements.lock --strict
       - name: Unit / detection tests
         run: python tools/pentest/test_alerts.py
       - name: Dependency review (PRs only)
@@ -90,7 +90,7 @@ jobs:
         uses: OpenSource-For-Freedom/Legion_runner@v1.0.41
         with:
           egress-policy: audit
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6.0.3
         with:
           fetch-depth: 0   # need full tag history to find the latest version
       - id: v
@@ -128,8 +128,8 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6.0.3
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -141,7 +141,8 @@ jobs:
         shell: bash
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller cyclonedx-bom
+          pip install -r requirements.lock --require-hashes
+          pip install pyinstaller cyclonedx-bom
       - name: Build (PyInstaller one-dir)
         shell: bash
         run: python -m PyInstaller packaging/windows/darkelf.spec --noconfirm --clean --distpath dist --workpath build/pyi
@@ -182,12 +183,12 @@ jobs:
           cat SHA256SUMS-windows.txt
       - name: Attest build provenance (signed, releases only)
         if: needs.version.outputs.is_release == 'true'
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             out/*.zip
             out/*.exe
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: darkelf-windows
           path: out/
@@ -213,8 +214,8 @@ jobs:
         uses: OpenSource-For-Freedom/Legion_runner@v1.0.41
         with:
           egress-policy: audit
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6.0.3
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -222,7 +223,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            xvfb dpkg-dev \
+            xvfb \
             libnss3 libnspr4 libxcomposite1 libxdamage1 libxrandr2 \
             libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
             libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 \
@@ -233,9 +234,10 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller cyclonedx-bom
+          pip install -r requirements.lock --require-hashes
+          pip install pyinstaller cyclonedx-bom
       - name: Build (PyInstaller one-dir)
-        run: python -m PyInstaller packaging/windows/darkelf.spec --noconfirm --clean --distpath dist --workpath build/pyi
+        run: python -m PyInstaller packaging/linux/darkelf.spec --noconfirm --clean --distpath dist --workpath build/pyi
       - name: Test build — smoke test the packaged app (xvfb headless)
         env:
           DARKELF_NO_FILTERS: "1"
@@ -246,31 +248,34 @@ jobs:
         run: |
           xvfb-run -a -s "-screen 0 1280x1024x24" ./dist/DarkelfShadow/DarkelfShadow
           echo "smoke test OK (exit $?)"
-      - name: Build .deb
+      - name: Build AppImage
         run: |
           mkdir -p out
-          bash packaging/linux/build_deb.sh "${VERSION}" "dist" "out"
-      - name: Lint the .deb (lintian, non-blocking)
-        run: |
-          sudo apt-get install -y --no-install-recommends lintian
-          lintian out/*.deb || true
+          bash packaging/linux/build_appimage.sh "${VERSION}" "dist" "out"
       - name: Generate SBOM
         run: cyclonedx-py environment --output-format json -o "out/sbom-linux-${VERSION}.json"
+      - name: Scan SBOM for vulnerabilities (grype)
+        # The CycloneDX SBOM lists the Python packages actually frozen into the
+        # build (identical set on both OSes), so scanning the Linux SBOM covers
+        # the dependency CVE surface. Fails the build on a high or critical CVE.
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b "$RUNNER_TEMP/grype-bin"
+          "$RUNNER_TEMP/grype-bin/grype" "sbom:out/sbom-linux-${VERSION}.json" --fail-on high
       - name: Sign — SHA256 checksums
         run: |
           cd out
           : > SHA256SUMS-linux.txt
-          for f in *.deb *.json; do
+          for f in *.AppImage *.json; do
             [ -e "$f" ] || continue
             sha256sum "$f" | tee -a SHA256SUMS-linux.txt
           done
           cat SHA256SUMS-linux.txt
       - name: Attest build provenance (signed, releases only)
         if: needs.version.outputs.is_release == 'true'
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
-          subject-path: out/*.deb
-      - uses: actions/upload-artifact@v4
+          subject-path: out/*.AppImage
+      - uses: actions/upload-artifact@v7
         with:
           name: darkelf-linux
           path: out/
@@ -299,7 +304,7 @@ jobs:
         uses: OpenSource-For-Freedom/Legion_runner@v1.0.41
         with:
           egress-policy: audit
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6.0.3
         with:
           fetch-depth: 0
       - id: tag
@@ -345,7 +350,7 @@ jobs:
         uses: OpenSource-For-Freedom/Legion_runner@v1.0.41
         with:
           egress-policy: audit
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
       - name: Collect assets + verify SHA256 signatures
@@ -367,7 +372,7 @@ jobs:
           echo "---- combined SHA256SUMS.txt ----"; cat SHA256SUMS.txt
           ls -la
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.version.outputs.tag }}
           name: Darkelf Shadow ${{ needs.version.outputs.tag }}
@@ -376,6 +381,44 @@ jobs:
           files: |
             release/*.exe
             release/*.zip
-            release/*.deb
+            release/*.AppImage
             release/*.json
             release/SHA256SUMS.txt
+
+  # ---------------------------------------------------------------- 7. publish to PyPI
+  # Builds the sdist + wheel and uploads them to PyPI using OIDC trusted
+  # publishing (no stored API token). Runs only for real releases.
+  #
+  # One-time setup on PyPI: create the project and add a trusted publisher for
+  #   owner: oracle-actual   repo: Darkelf-Shadow   workflow: deploy.yml
+  # Leave the publisher's "environment" field blank to match this job. See
+  # https://docs.pypi.org/trusted-publishers/ . You can optionally add a
+  # GitHub Environment here later to require manual approval before a release.
+  publish-pypi:
+    name: Publish to PyPI (trusted publishing)
+    needs: [version, build-windows, build-linux]
+    if: needs.version.outputs.is_release == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      id-token: write   # OIDC token for PyPI trusted publishing
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Legion Harden Runner
+        uses: OpenSource-For-Freedom/Legion_runner@v1.0.41
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v6.0.3
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Stamp resolved version into sources
+        run: |
+          python -c "import pathlib,re,os; v=os.environ['VERSION']; pathlib.Path('version.txt').write_text(v+'\n'); p=pathlib.Path('app/__init__.py'); p.write_text(re.sub(r'__version__\s*=\s*\".*?\"', f'__version__ = \"{v}\"', p.read_text()))"
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

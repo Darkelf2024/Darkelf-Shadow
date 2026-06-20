@@ -1,5 +1,5 @@
 # Ruff configuration for Darkelf Shadow CI lint gate.
-target-version = "py312"
+target-version = "py314"
 line-length = 120
 
 [lint]

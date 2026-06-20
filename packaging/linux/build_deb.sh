@@ -27,8 +27,32 @@ mkdir -p \
 
 cp -r "${BUNDLE}/." "${ROOT}/opt/darkelf-shadow/"
 
+# Defensive: drop the bundled libgbm.so.1 so the app uses the host Mesa stack.
+# This is normally already excluded by packaging/linux/darkelf.spec, but we
+# repeat it here (idempotent) so a .deb built from any externally-provided
+# dist/ is still correct. PyInstaller's vendored libgbm.so.1 cannot load a
+# newer end-user Mesa's DRI drivers ("did not find extension DRI_Mesa version
+# 1" / "EGL: Failed to initialize GBM device"), which breaks GPU init and the
+# window never appears. The host libgbm1 (a runtime dependency) matches the
+# installed DRI drivers.
+rm -f "${ROOT}/opt/darkelf-shadow/_internal/libgbm.so.1"
+
 cat > "${ROOT}/usr/bin/darkelf-shadow" <<'EOF'
 #!/bin/sh
+# Darkelf Shadow launcher.
+#
+# Graphics: the bundled libgbm.so.1 is stripped at package build time so the
+# system Mesa stack (libgbm1/libegl1/libgl1) is used for GPU acceleration.
+# If a particular machine still cannot initialise the GPU (e.g. a headless VM
+# or a broken driver), force pure software rendering with:
+#
+#   DARKELF_SOFTWARE_GL=1 darkelf-shadow
+#
+if [ -n "${DARKELF_SOFTWARE_GL:-}" ]; then
+    export LIBGL_ALWAYS_SOFTWARE=1
+    export QT_XCB_GL_INTEGRATION=none
+    export QTWEBENGINE_CHROMIUM_FLAGS="${QTWEBENGINE_CHROMIUM_FLAGS:-} --disable-gpu"
+fi
 exec /opt/darkelf-shadow/DarkelfShadow "$@"
 EOF
 chmod 0755 "${ROOT}/usr/bin/darkelf-shadow"
@@ -66,5 +90,6 @@ Description: Hardened ephemeral privacy browser
 EOF
 chmod 0755 "${ROOT}/DEBIAN"
 
+mkdir -p "${OUT_DIR}"
 dpkg-deb --build --root-owner-group "${ROOT}" "${OUT_DIR}/${PKG}.deb"
 echo "built: ${OUT_DIR}/${PKG}.deb"

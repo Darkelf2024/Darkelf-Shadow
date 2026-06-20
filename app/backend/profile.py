@@ -4,6 +4,7 @@
 # frontend receives; it owns the web engine's privacy posture.
 
 import secrets
+import threading
 
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEngineSettings
 
@@ -25,13 +26,23 @@ class DarkelfEngine:
 
         self._apply_settings()
 
-        # Filter engine (network + cosmetic).
+        # Filter engine (network + cosmetic). Built on a background thread so
+        # the window opens immediately instead of waiting on ~9 filter-list
+        # downloads. Until it is ready the engine has no rules (requests pass
+        # through); blocking switches on the moment the lists finish loading.
+        # HTTPS-upgrade and the MiniAI sentinel do not depend on these lists,
+        # so they are active from the first request.
         self.engine = EasyListEngine()
+        self.filters_ready = threading.Event()
         if load_filters:
-            try:
-                self.engine.load_and_build(EASYLIST_URLS)
-            except Exception as e:
-                print("[Darkelf] Filter load failed:", e)
+            threading.Thread(
+                target=self._load_filters_async,
+                args=(EASYLIST_URLS,),
+                name="darkelf-filter-loader",
+                daemon=True,
+            ).start()
+        else:
+            self.filters_ready.set()
 
         # Passive heuristic sentinel.
         self.mini_ai = DarkelfMiniAISentinel()
@@ -44,6 +55,25 @@ class DarkelfEngine:
         # Profile-level fingerprint hardening (applies to every page/view).
         self.canvas_seed = secrets.randbits(32) & 0xFFFFFFFF
         install_hardening(self.profile, self.canvas_seed)
+
+    def _load_filters_async(self, urls) -> None:
+        """Build the filter rules off the UI thread, then swap them in atomically.
+
+        load_and_build runs against a throwaway engine; only the finished rule
+        sets are assigned onto the live engine. Each assignment is atomic under
+        the GIL, so the interceptor never observes half-built rules.
+        """
+        try:
+            staged = EasyListEngine()
+            staged.load_and_build(urls)
+            self.engine.network_rules = staged.network_rules
+            self.engine.cosmetic = staged.cosmetic
+            self.engine.cosmetic_exceptions = staged.cosmetic_exceptions
+            print(f"[Darkelf] Filters ready: {len(staged.network_rules)} network rules")
+        except Exception as e:
+            print("[Darkelf] Filter load failed:", e)
+        finally:
+            self.filters_ready.set()
 
     def _apply_settings(self) -> None:
         s = self.profile.settings()

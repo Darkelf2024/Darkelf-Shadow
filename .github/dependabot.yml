@@ -1,17 +1,45 @@
 version: 2
+
+# Pull Python dependency updates only from the official Python Package Index.
+# replaces-base means Dependabot resolves against this index and no other.
+registries:
+  pypi:
+    type: python-index
+    url: https://pypi.org/simple/
+    replaces-base: true
+
 updates:
-  # Keep GitHub Actions pinned references up to date (supply-chain hygiene).
+  # ---- Python packages, from PyPI ----------------------------------------
+  # Covers requirements.txt, requirements.lock, and pyproject.toml in the root.
+  - package-ecosystem: "pip"
+    directory: "/"
+    registries:
+      - pypi
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "python"]
+    # Let a release settle before proposing it, so a freshly published (and
+    # possibly yanked or compromised) version is not pulled in on day one.
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
+    # One combined PR per run instead of a separate PR per package.
+    groups:
+      python-dependencies:
+        patterns: ["*"]
+
+  # ---- GitHub Actions ----------------------------------------------------
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
     labels: ["ci", "dependencies"]
-
-  # Keep Python dependencies (requirements.txt) patched.
-  - package-ecosystem: "pip"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-    labels: ["dependencies"]
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ["*"]

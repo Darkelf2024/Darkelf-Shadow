@@ -447,7 +447,7 @@ class EasyListEngine:
                 "pagead", "adsystem", "adservice", "adserver", "gampad",
                 "prebid", "openrtb", "criteo", "taboola", "outbrain", "adnxs",
             )
-            if any(k in req_host for k in high_signal) and not fp_host.endswith("youtube.com"):
+            if any(k in req_host for k in high_signal) and not (fp_host == "youtube.com" or fp_host.endswith(".youtube.com")):
                 return True
 
         if req_type not in ("script", "xmlhttprequest", "subdocument"):
