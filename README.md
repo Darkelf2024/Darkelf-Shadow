@@ -31,7 +31,7 @@ If a double click does nothing, your system is missing FUSE. Install it with `su
 
 Prefer not to install? Grab the portable ZIP from the same page, unzip it, and open `DarkelfShadow.exe`.
 
-### Python users (pip)
+### Python users (pip) v4.6.2 is still current
 
 If you already have Python 3.10 or newer (up to 3.14), install it straight from PyPI:
 
