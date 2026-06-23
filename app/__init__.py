@@ -1,2 +1,2 @@
 # Darkelf Shadow application package
-__version__ = "1.0.4"  # x-release-please-version
+__version__ = "1.0.5"  # x-release-please-version
