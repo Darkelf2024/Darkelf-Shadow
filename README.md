@@ -7,31 +7,6 @@
 
 ---
 
-## ⬇️ Install
-
-Darkelf Shadow runs on Linux and Windows, and you do not need to be technical to set it up. Pick the option that matches your computer.
-
-### Linux
-
-The AppImage is one file that runs on most Linux distributions. There is nothing to install and nothing to clean up later.
-
-1. Open the [latest release](https://github.com/oracle-actual/Darkelf-Shadow/releases/latest) and download the file that ends in `.AppImage`.
-2. Allow it to run. Right click the file, open Properties, and turn on "Allow executing file as program". If you like the terminal instead:
-   ```bash
-   chmod +x Darkelf-Shadow-*.AppImage
-   ```
-3. Double click the file to start browsing. Keep it wherever you want and open it again any time.
-
-If a double click does nothing, your system is missing FUSE. Install it with `sudo apt install libfuse2`, then try again.
-
-### Windows
-
-1. Open the [latest release](https://github.com/oracle-actual/Darkelf-Shadow/releases/latest) and download `DarkelfShadow-Setup.exe`.
-2. Run it and follow the prompts. It adds Darkelf Shadow to your Start menu.
-3. Open Darkelf Shadow from the Start menu.
-
-Prefer not to install? Grab the portable ZIP from the same page, unzip it, and open `DarkelfShadow.exe`.
-
 ### Python users (pip) v4.6.2 is still current
 
 If you already have Python 3.10 or newer (up to 3.14), install it straight from PyPI:
