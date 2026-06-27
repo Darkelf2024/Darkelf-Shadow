@@ -7,7 +7,7 @@
 
 ---
 
-### Python users (pip) v4.6.2 is still current
+### Python users (pip) v5.0.0 is still current
 
 If you already have Python 3.10 or newer (up to 3.14), install it straight from PyPI:
 
