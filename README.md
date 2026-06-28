@@ -1,13 +1,13 @@
-# 🕶️ Darkelf Shadow - Community Edition v5.0.3 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/darkelf-shadow?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/darkelf-shadow)
+# 🕶️ Darkelf Shadow - Community Edition v5.0.4 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/darkelf-shadow?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/darkelf-shadow)
 
 **Fully Hardened • Ephemeral • Zero-Trace Browser (Qt WebEngine / Chromium Core)**
 
-- Darkelf Shadow v5.0.3 is a defense-in-depth, privacy-hardened web browser engineered to eliminate persistent tracking, reduce attack surface, and actively defend against modern web threats — all while operating entirely in-memory. - Coming Soon!
+- Darkelf Shadow is a defense-in-depth, privacy-hardened web browser engineered to eliminate persistent tracking, reduce attack surface, and actively defend against modern web threats — all while operating entirely in-memory. - Coming Soon!
 - Desktop v1.0.3 is in Beta for linux/Windows - Moved to a new repo!
 
 ---
 
-### Python users (pip) v5.0.3 is still current
+### Python users (pip) is still current
 
 If you already have Python 3.10 or newer (up to 3.14), install it straight from PyPI:
 
