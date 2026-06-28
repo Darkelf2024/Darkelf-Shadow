@@ -1090,9 +1090,29 @@ class HardenedWebPage(QWebEnginePage):
             )
             return False
 
+        current_host = self.url().host().lower()
+        target_host = url.host().lower()
+
+        #
+        # Only DuckDuckGo result clicks open new tabs.
+        # Normal site navigation stays in the same tab.
+        #
+        is_duckduckgo_results = (
+            current_host.endswith("duckduckgo.com")
+            or current_host.endswith("lite.duckduckgo.com")
+        )
+
+        leaving_duckduckgo = (
+            target_host
+            and not target_host.endswith("duckduckgo.com")
+            and not target_host.endswith("lite.duckduckgo.com")
+        )
+
         if (
             navtype == QWebEnginePage.NavigationTypeLinkClicked
             and isMainFrame
+            and is_duckduckgo_results
+            and leaving_duckduckgo
         ):
             parent = getattr(self, "_parent_view", None)
             browser = parent.window() if parent else None
