@@ -858,9 +858,9 @@ class AboutPage(QWidget):
 
         for text in (
             "Private Mode",
-            "Tracker Blocking",
-            "HTTPS Upgrade",
-            "Fingerprint Defense",
+            "Tracker Block",
+            "HTTPS",
+            "Fingerprints",
             "WebRTC Block",
             "MiniAI Sentinel",
         ):
