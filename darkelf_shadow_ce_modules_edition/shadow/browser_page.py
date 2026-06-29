@@ -1080,6 +1080,11 @@ class HardenedWebPage(QWebEnginePage):
         self.inject_youtube_js_spoof()
         self.inject_global_chrome_spoof()
 
+    def _host_matches_domain(self, host, domain):
+        host = (host or "").lower().rstrip(".")
+        domain = (domain or "").lower().rstrip(".")
+        return bool(host) and bool(domain) and (host == domain or host.endswith("." + domain))
+
     def acceptNavigationRequest(self, url, navtype, isMainFrame):
 
         if url.scheme() == "file":
@@ -1094,10 +1099,7 @@ class HardenedWebPage(QWebEnginePage):
         target_host = url.host().lower()
         target_path = url.path().lower()
 
-        is_duckduckgo_page = (
-            current_host.endswith("duckduckgo.com")
-            or current_host.endswith("lite.duckduckgo.com")
-        )
+        is_duckduckgo_page = self._host_matches_domain(current_host, "duckduckgo.com")
 
         is_clicked_link = (
             navtype == QWebEnginePage.NavigationTypeLinkClicked
@@ -1106,12 +1108,11 @@ class HardenedWebPage(QWebEnginePage):
 
         is_external_host = (
             target_host
-            and not target_host.endswith("duckduckgo.com")
-            and not target_host.endswith("lite.duckduckgo.com")
+            and not self._host_matches_domain(target_host, "duckduckgo.com")
         )
 
         is_ddg_result_redirect = (
-            target_host.endswith("duckduckgo.com")
+            self._host_matches_domain(target_host, "duckduckgo.com")
             and (
                 target_path.startswith("/l/")
                 or "uddg=" in url.toString()
