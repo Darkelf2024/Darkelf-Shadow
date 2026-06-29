@@ -23,7 +23,8 @@ import uuid
 from collections import deque
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus
-
+import urllib.parse
+import urllib.request
 
 # --- Qt Core ---
 from PySide6.QtCore import (
@@ -103,8 +104,8 @@ from shadow.browser_homepage import HOMEPAGE
 
 from shadow.browser_ui import BrowserUIMixin
 
-#devnull = open(os.devnull, 'w')
-#os.dup2(devnull.fileno(), sys.stderr.fileno())
+devnull = open(os.devnull, 'w')
+os.dup2(devnull.fileno(), sys.stderr.fileno())
 
 # --------------------------------------------------
 # Homepage Themes
@@ -133,9 +134,8 @@ class DarkelfBrowser(BrowserUIMixin, QMainWindow):
         self.setWindowTitle("")
         self.resize(1200, 800)
 
-        # ✅ macOS FIX (PUT HERE)
+        # ✅ macOS FIX
 
-        # ADD THIS
         self.setUnifiedTitleAndToolBarOnMac(False)
 
         self.setStyleSheet("""
@@ -230,7 +230,7 @@ class DarkelfBrowser(BrowserUIMixin, QMainWindow):
         # -----------------------------
         self.toolbar = self._make_toolbar()
 
-        # 🔥 THIS IS CRITICAL — DO NOT PUT TOOLBAR IN LAYOUT
+        # 🔥 THIS IS CRITICAL
         self.addToolBar(Qt.TopToolBarArea, self.toolbar)
 
         # -----------------------------
@@ -1150,7 +1150,21 @@ class DarkelfBrowser(BrowserUIMixin, QMainWindow):
         self.tabs.setCurrentIndex(idx)
         
     def open_source(self, url):
+        """
+        Open the HTML source of the current page.
+
+        Only HTTP and HTTPS URLs are permitted.
+        """
+
         try:
+            parsed = urllib.parse.urlparse(url)
+
+            # Only allow web pages.
+            if parsed.scheme.lower() not in ("http", "https"):
+                raise ValueError(
+                    f"Blocked unsupported URL scheme: {parsed.scheme}"
+                )
+
             req = urllib.request.Request(
                 url,
                 headers={
@@ -1158,7 +1172,8 @@ class DarkelfBrowser(BrowserUIMixin, QMainWindow):
                 }
             )
 
-            with urllib.request.urlopen(req) as response:
+            # Safe because the scheme has already been validated.
+            with urllib.request.urlopen(req, timeout=10) as response:  # nosec B310
                 html = response.read().decode(
                     "utf-8",
                     errors="replace"
@@ -1210,8 +1225,8 @@ class DarkelfBrowser(BrowserUIMixin, QMainWindow):
         if hasattr(self, "_bookmark_dialog"):
             try:
                 self._bookmark_dialog.close()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Unable to close bookmark dialog: {e}")
 
         dlg = QDialog(self)
         self._bookmark_dialog = dlg
