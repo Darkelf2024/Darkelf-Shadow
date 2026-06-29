@@ -1,9 +1,17 @@
-# 🕶️ Darkelf Shadow - Community Edition v5.0.5 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/darkelf-shadow?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/darkelf-shadow)
+# 🕶️ Darkelf Shadow - Community Edition v5.0.6 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/darkelf-shadow?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/darkelf-shadow)
 
 **Fully Hardened • Ephemeral • Zero-Trace Browser (Qt WebEngine / Chromium Core)**
 
 - Darkelf Shadow is a defense-in-depth, privacy-hardened web browser engineered to eliminate persistent tracking, reduce attack surface, and actively defend against modern web threats — all while operating entirely in-memory. - Coming Soon!
 - Desktop v1.0.3 is in Beta for linux/Windows - Moved to a new repo!
+
+## Update
+
+- Added **Darkelf Quantum** to the hamburger menu for quick access.
+- Added **Post-Quantum (PQ) Chaining** to strengthen session hardening through evolving cryptographic state and ephemeral memory tokens.
+- Added a **Darkelf Quantum Status** dialog displaying runtime status, session metrics, and active SHA3-512 chain information.
+- Improved **Quantum lifecycle management** with centralized session-state cleanup during browser shutdown and Nuke Browser operations.
+- Continued modularization of the browser architecture with UI components being migrated into dedicated modules.
 
 ---
 
