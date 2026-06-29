@@ -715,10 +715,7 @@ class PrivacyPage(QWidget):
         self.miniai_badge.setText("Monitoring")
         self.rules_badge.setText("Loaded")
 
-        #
         # Rule Count
-        #
-
         count = None
 
         for attr in (
@@ -727,15 +724,11 @@ class PrivacyPage(QWidget):
             "rules_loaded",
             "filter_rule_count",
         ):
+            value = getattr(self.browser, attr, None)
 
-            if hasattr(self.browser, attr):
-
-                try:
-                    count = getattr(self.browser, attr)
-                    break
-
-                except Exception:
-                    pass
+            if value is not None:
+                count = value
+                break
         
         count = None
 
